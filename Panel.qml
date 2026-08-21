@@ -113,7 +113,14 @@ Panel {
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
-    Quickshell.execDetached(["omarchy-launch-webapp", value])
+    var behavior = setting("linkBehavior", "Browser tab")
+    if (behavior === "Web app window") {
+      Quickshell.execDetached(["omarchy-launch-webapp", value])
+    } else if (behavior === "Web app window (focus existing)") {
+      Quickshell.execDetached(["omarchy-launch-or-focus-webapp", "chrome-github", value])
+    } else {
+      Quickshell.execDetached(["omarchy-launch-browser", value])
+    }
     close()
   }
 

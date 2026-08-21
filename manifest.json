@@ -20,6 +20,7 @@
     "defaultSection": "right",
     "defaults": {
       "refreshIntervalSec": 900,
+      "linkBehavior": "Browser tab",
       "includeArchived": false,
       "includeForks": false,
       "repositoryScope": "Owned",
@@ -34,6 +35,7 @@
     },
     "schema": [
       { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 60, "max": 3600, "step": 60, "defaultValue": 900 },
+      { "key": "linkBehavior", "type": "enum", "label": "Open links", "options": ["Browser tab", "Web app window", "Web app window (focus existing)"], "defaultValue": "Browser tab", "description": "Open links in a browser tab, in a dedicated web app window, or in an existing web app window when one is already open. The web app modes require a Chromium-based default browser." },
       { "key": "includeArchived", "type": "boolean", "label": "Include archived repositories", "defaultValue": false },
       { "key": "includeForks", "type": "boolean", "label": "Include forked repositories", "defaultValue": false },
       { "key": "repositoryScope", "type": "enum", "label": "Repository scope", "options": ["Owned", "Owned and organizations"], "defaultValue": "Owned", "description": "List only repositories you own, or include organization repositories. This scope also supplies candidates for Actions scanning." },
