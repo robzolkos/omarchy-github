@@ -113,7 +113,7 @@ Panel {
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
-    Quickshell.execDetached(["omarchy-launch-browser", value])
+    Quickshell.execDetached(["omarchy-launch-webapp", value])
     close()
   }
 
