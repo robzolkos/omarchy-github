@@ -135,6 +135,7 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 | Setting | Default |
 | --- | --- |
 | Refresh interval | 900 seconds (15 minutes) |
+| Open links | **Browser tab** |
 | Include archived repositories | Off |
 | Include forks | Off |
 | Repository scope | **Owned** |
@@ -151,6 +152,8 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 **Repository scope** controls both the repository dashboard and the candidate repositories for Actions scanning. **Owned and organizations** is opt-in. With the default **Recent repositories** scan, Actions requests remain capped to the 15 most recently updated repositories in that wider scope.
 
 **All repositories** is also opt-in and starts six paginated Actions request streams per repository on every refresh. Combining it with **Owned and organizations** can consume substantial GitHub API capacity in large organizations. Use **Recent repositories** or **Off** for a bounded scan, and increase the refresh interval when broader monitoring is required.
+
+**Open links** controls where notifications, pull requests, issues, workflow runs, and repositories open. The default **Browser tab** keeps the historical behavior in any browser. **Web app window** opens each link in a dedicated Chromium app window via `omarchy-launch-webapp`, and **Web app window (reuse)** keeps a single web app window: any open GitHub web app window is closed and the clicked link opens in a fresh one. Both web app modes require a Chromium-based default browser; with any other default browser they fall back to launching Chromium directly.
 
 Set these options from the command line after installing the plugin:
 

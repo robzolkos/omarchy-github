@@ -104,7 +104,7 @@ Item {
     }
 
     function helperPath() {
-        return Qt.resolvedUrl("omarchy-github-fetch").toString().replace(/^file:\/\//, "");
+        return decodeURIComponent(Qt.resolvedUrl("omarchy-github-fetch").toString().replace(/^file:\/\//, ""));
     }
 
     function command() {
