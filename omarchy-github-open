@@ -10,7 +10,7 @@ if [[ -z $url ]]; then
   exit 0
 fi
 
-pattern='chrome-github\.com__'
+pattern='github\.com__'
 
 addresses=$(hyprctl clients -j | jq -r --arg p "$pattern" '.[] | select(.class | test($p)) | .address')
 
