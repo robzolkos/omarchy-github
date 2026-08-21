@@ -1,0 +1,25 @@
+#!/bin/bash
+# Reuse a single GitHub web app window: close any open GitHub web app
+# windows, then open url in a fresh one so the window always shows the
+# link that was clicked.
+# omarchy:args=<url>
+
+url="$1"
+
+if [[ -z $url ]]; then
+  exit 0
+fi
+
+pattern='chrome-github\.com__'
+
+addresses=$(hyprctl clients -j | jq -r --arg p "$pattern" '.[] | select(.class | test($p)) | .address')
+
+while IFS= read -r addr; do
+  [[ -n $addr ]] || continue
+  hyprctl dispatch "hl.dsp.window.close({ window = \"address:$addr\" })" >/dev/null 2>&1 ||
+    hyprctl dispatch "closewindow address:$addr" >/dev/null 2>&1
+done <<<"$addresses"
+
+sleep 0.25
+
+exec omarchy-launch-webapp "$url"

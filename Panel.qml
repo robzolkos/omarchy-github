@@ -116,8 +116,9 @@ Panel {
     var behavior = setting("linkBehavior", "Browser tab")
     if (behavior === "Web app window") {
       Quickshell.execDetached(["omarchy-launch-webapp", value])
-    } else if (behavior === "Web app window (focus existing)") {
-      Quickshell.execDetached(["omarchy-launch-or-focus-webapp", "chrome-github", value])
+    } else if (behavior === "Web app window (reuse)") {
+      var opener = Qt.resolvedUrl("omarchy-github-open").toString().replace(/^file:\/\//, "")
+      Quickshell.execDetached([opener, value])
     } else {
       Quickshell.execDetached(["omarchy-launch-browser", value])
     }
