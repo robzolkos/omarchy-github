@@ -100,7 +100,8 @@ omarchy plugin remove robzolkos.github
 | --- | --- |
 | Left click Octocat | Open or close the dashboard |
 | Right or middle click Octocat | Refresh |
-| Click a row | Open it on GitHub in a web app window; notification rows are also marked read |
+| Click a row | Open it on GitHub; notification rows are also marked read |
+| Gear button in the panel header | Open the settings page |
 | Check button on a notification | Mark the thread read immediately, then confirm with GitHub |
 | **Mark all read** in the notifications footer | Arm the bulk mark-as-read |
 | **Confirm?** on the armed button | Mark every notification on screen read |
@@ -112,7 +113,7 @@ omarchy plugin remove robzolkos.github
 | `Escape` in search | Clear search and return to row navigation |
 | `Escape` elsewhere | Close the panel |
 
-Rows open through `omarchy-launch-webapp`, so GitHub gets a dedicated app window rather than a tab in an already-crowded browser. That helper targets Chromium-based default browsers and falls back to `chromium.desktop`, so a machine without any Chromium-based browser installed will not open links.
+Rows open through `omarchy-launch-webapp` by default, so GitHub gets a dedicated app window rather than a tab in an already-crowded browser. That helper targets Chromium-based default browsers and falls back to `chromium.desktop`; if you have no Chromium-based browser, switch **Open links** to **Browser tab** and rows open through `omarchy-launch-browser` instead.
 
 Activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available.
 
@@ -132,11 +133,14 @@ Use the filter chips to show all repositories or only repositories with a non-ze
 
 ## Settings
 
+The everyday options — **Open links**, **Repository scope**, **Refresh interval**, and the archived, forked, and unlit-icon toggles — are also editable in the panel itself through the gear button in the header. Changes are written to the widget's entry in `shell.json` and apply immediately. The remaining options stay in Omarchy's bar widget settings.
+
 Configure the widget through Omarchy's bar widget settings. Existing installations retain the narrower repository scope and bounded Actions scan:
 
 | Setting | Default |
 | --- | --- |
 | Refresh interval | 900 seconds (15 minutes) |
+| Open links | **Web app window** |
 | Include archived repositories | Off |
 | Include forks | Off |
 | Repository scope | **Owned** |

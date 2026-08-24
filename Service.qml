@@ -54,6 +54,9 @@ Item {
         return !item.draft && root.isBrokenCheck(item.checks);
     }).length
     readonly property bool iconAlwaysUnlit: boolSetting("iconAlwaysUnlit", false)
+    // An unrecognised value falls back to the web app window rather than the
+    // browser, so a stale entry cannot silently revert the default behaviour.
+    readonly property string linkBehavior: String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"
     readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || actionCount > 0 || reviewRequests.length > 0 || failingPullRequestCount > 0)
 
     // StatusCheckRollup groupings live here so the alarming count, the row label

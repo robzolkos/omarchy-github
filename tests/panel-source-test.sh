@@ -36,10 +36,27 @@ assert_contains $'function markSelectedRead() {\n    if (selectedTarget && selec
   "keyboard notification marking is blocked during refresh"
 assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationId || linkRow.rowId, linkRow.url)' \
   "clicking a notification does not open and mark it read"
-assert_contains 'Quickshell.execDetached(["omarchy-launch-webapp", value])' \
-  "links do not open in a web app window"
-assert_not_contains '["omarchy-launch-browser"' \
-  "links still open in a browser tab"
+assert_contains $'if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])\n    else Quickshell.execDetached(["omarchy-launch-webapp", value])' \
+  "the open-links setting does not choose between the browser and the web app window"
+
+# updateEntryInline rewrites the shell.json entry whole, so a persist that does
+# not carry the current settings forward silently drops every other setting.
+assert_contains $'var entry = { id: root.moduleName }\n    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]' \
+  "persisting a setting does not merge the entry from the current settings"
+assert_contains 'root.bar.shell.updateEntryInline(root.moduleName, entry)' \
+  "settings changes are not written back to shell.json"
+# Dropdown writes `value` imperatively on selection, which destroys a plain
+# inline binding the first time a row is picked.
+assert_contains $'Binding on value { value: github.linkBehavior }' \
+  "the open-links dropdown does not re-assert the persisted value"
+assert_contains 'blocked: root.settingsOpen || search.activeFocus' \
+  "the key catcher steals keys from the settings controls"
+assert_contains 'visible: !root.settingsOpen' \
+  "the dashboard stays visible behind the settings page"
+assert_contains 'visible: root.settingsOpen' \
+  "the settings page is always visible"
+assert_contains $'pageFlip.stop()\n      settingsOpen = false' \
+  "closing the panel leaves it on the settings page"
 assert_contains $'PanelActionButton {\n        visible: linkRow.showReadAction\n        enabled: github.markingNotificationId !== linkRow.notificationId' \
   "notification row marking is disabled during refresh"
 

@@ -31,6 +31,9 @@ assert_contains 'notifications = [item].concat(notifications);' \
   "failed notification marking does not restore the hidden row"
 assert_not_contains $'if (value === "" || loading || fetchProcess.running || markProcess.running)' \
   "single-notification marking is still blocked during refresh"
+assert_contains 'String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"' \
+  "an unrecognised open-links value does not fall back to the web app window"
+
 assert_contains $'function canonicalNotificationTimestamp(value) {\n        var text = String(value || "");\n        if (!/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$/.test(text))\n            return "";' \
   "notification boundaries are not shape validated"
 assert_contains 'return milliseconds <= Date.now() ? text : "";' \

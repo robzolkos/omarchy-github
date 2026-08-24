@@ -27,6 +27,25 @@ Panel {
   property bool issuesExpanded: false
   property bool actionsExpanded: false
   property bool failuresExpanded: false
+  // settingsOpen is the page on screen; pendingSettingsOpen is the page the
+  // in-flight flip will land on, since the swap happens edge-on at 90 degrees.
+  property bool settingsOpen: false
+  property bool pendingSettingsOpen: false
+  readonly property var linkBehaviorOptions: [
+    { value: "Web app window", label: "Web app window" },
+    { value: "Browser tab", label: "Browser tab" }
+  ]
+  readonly property var repositoryScopeOptions: [
+    { value: "Owned", label: "Owned repositories" },
+    { value: "Owned and organizations", label: "Owned and organizations" }
+  ]
+  readonly property var refreshIntervalOptions: [
+    { value: "300", label: "Every 5 minutes" },
+    { value: "600", label: "Every 10 minutes" },
+    { value: "900", label: "Every 15 minutes" },
+    { value: "1800", label: "Every 30 minutes" },
+    { value: "3600", label: "Every hour" }
+  ]
   // Carry sub-notch wheel deltas between events. Touchpads emit many small
   // angleDeltas; mice often emit a fake 1–2px pixelDelta that would otherwise
   // crawl the dashboard a couple of pixels per click.
@@ -147,8 +166,39 @@ Panel {
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
-    Quickshell.execDetached(["omarchy-launch-webapp", value])
+    // omarchy-launch-webapp gives GitHub its own window; omarchy-launch-browser
+    // hands the URL to the default browser for those without a Chromium-based one.
+    if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])
+    else Quickshell.execDetached(["omarchy-launch-webapp", value])
     close()
+  }
+
+  // Settings live on this widget's entry in shell.json; the shell hot-reloads
+  // the file and every instance sees the new value. Applied locally first so
+  // the control moves on the click, and the entry is merged from the current
+  // settings because updateEntryInline replaces it whole.
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) {
+      if (values[key] === undefined) delete entry[key]
+      else entry[key] = values[key]
+    }
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function showSettings(open) {
+    var next = open === true
+    if (settingsOpen === next || pageFlip.running) return
+    pendingSettingsOpen = next
+    // A popup left open would float over the card while it flips.
+    linkBehaviorDropdown.close()
+    repositoryScopeDropdown.close()
+    refreshIntervalDropdown.close()
+    if (sortPicker) sortPicker.popup.close()
+    pageFlip.restart()
   }
 
   function filteredRepositories() {
@@ -192,6 +242,13 @@ Panel {
     // A pending confirmation must never survive the panel closing, or the next
     // open would run a destructive action on a single click.
     if (notificationsSection) notificationsSection.disarmAction()
+    if (!opened) {
+      // Never reopen mid-flip or on a page the user cannot see themselves onto.
+      pageFlip.stop()
+      settingsOpen = false
+      pendingSettingsOpen = false
+      cardRotation.angle = 0
+    }
     if (opened) {
       cursorActive = false
       cursorIndex = 0
@@ -235,30 +292,69 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(430))
-    contentHeight: panel.fittedContentHeight(content.implicitHeight, Style.space(680))
+    contentHeight: panel.fittedContentHeight(root.settingsOpen
+      ? settingsHeader.implicitHeight + settingsContent.implicitHeight + Style.space(24)
+      : content.implicitHeight, Style.space(680))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: search.activeFocus || sortPicker.popup.visible
-      onMoveRequested: function(dx, dy) { if (dy !== 0) root.moveCursor(dy) }
-      onActivateRequested: root.activateCursor()
-      onCloseRequested: root.close()
+      // Settings controls own their native focus chain and keys. The settings
+      // page carries its own Escape handler to return to the dashboard.
+      blocked: root.settingsOpen || search.activeFocus || sortPicker.popup.visible
+      onMoveRequested: function(dx, dy) { if (root.settingsOpen) return; if (dy !== 0) root.moveCursor(dy) }
+      onActivateRequested: if (!root.settingsOpen) root.activateCursor()
+      onCloseRequested: if (root.settingsOpen) root.showSettings(false); else root.close()
       // Tab enters the native control chain so search, filters, sorting, and
       // section controls remain keyboard-accessible.
       onTabRequested: function(direction) {
+        if (root.settingsOpen) return
         if (direction < 0) sortPicker.forceActiveFocus()
         else search.forceActiveFocus()
       }
       onTextKey: function(text) {
+        if (root.settingsOpen) return
         if (text === "r" || text === "R") github.refresh()
         else if (text === "/") Qt.callLater(function() { search.forceActiveFocus() })
         else if (text === "m" || text === "M") root.markSelectedRead()
       }
 
+      // Rotating the key catcher flips both pages together as one card.
+      transform: Rotation {
+        id: cardRotation
+        origin.x: keyCatcher.width / 2
+        origin.y: keyCatcher.height / 2
+        axis.x: 0
+        axis.y: 1
+        axis.z: 0
+      }
+
+      SequentialAnimation {
+        id: pageFlip
+
+        NumberAnimation { target: cardRotation; property: "angle"; from: 0; to: 90; duration: 130; easing.type: Easing.InQuad }
+        ScriptAction {
+          script: {
+            root.settingsOpen = root.pendingSettingsOpen
+            cardRotation.angle = -90
+            if (root.settingsOpen && settingsFlick) settingsFlick.contentY = 0
+          }
+        }
+        NumberAnimation { target: cardRotation; property: "angle"; from: -90; to: 0; duration: 170; easing.type: Easing.OutQuad }
+        ScriptAction {
+          // Focus lands on the first setting so Tab walks forward through the
+          // form, and Qt.callLater waits for the visibility pass to finish.
+          script: Qt.callLater(function() {
+            if (root.settingsOpen) linkBehaviorDropdown.forceActiveFocus()
+            else keyCatcher.forceActiveFocus()
+          })
+        }
+      }
+
       Flickable {
         id: panelFlick
         anchors.fill: parent
+        visible: !root.settingsOpen
         contentWidth: width
         contentHeight: content.implicitHeight
         clip: true
@@ -292,6 +388,17 @@ Panel {
                 + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message)
             foreground: root.foreground
             fontFamily: root.fontFamily
+            // The hero reserves the trailing space and centres the control
+            // against the labels, so the gear needs no geometry of its own.
+            trailingControl: Component {
+              PanelActionButton {
+                iconText: "󰒓"
+                tooltipText: "GitHub settings"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: root.showSettings(true)
+              }
+            }
             iconComponent: Component {
               Text {
                 text: ""
@@ -528,6 +635,214 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
+          }
+        }
+      }
+
+      ColumnLayout {
+        id: settingsPage
+        anchors.fill: parent
+        visible: root.settingsOpen
+        spacing: Style.space(12)
+        // AfterItem so an open dropdown consumes the first Escape to close
+        // itself, and only the next one returns to the dashboard.
+        Keys.priority: Keys.AfterItem
+        Keys.onEscapePressed: function(event) {
+          root.showSettings(false)
+          event.accepted = true
+        }
+
+        Column {
+          id: settingsHeader
+          Layout.fillWidth: true
+          spacing: Style.space(12)
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(settingsBackButton.implicitHeight, settingsLabels.implicitHeight)
+
+            PanelActionButton {
+              id: settingsBackButton
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "\U000F004D"
+              tooltipText: "Back to the dashboard"
+              foreground: root.foreground
+              focusable: true
+              fontFamily: root.fontFamily
+              onClicked: root.showSettings(false)
+            }
+
+            Column {
+              id: settingsLabels
+              anchors.left: settingsBackButton.right
+              anchors.leftMargin: Style.space(10)
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(3)
+
+              Text {
+                text: "GITHUB SETTINGS"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+              }
+            }
+          }
+
+          PanelSeparator {
+            foreground: root.foreground
+          }
+        }
+
+        Flickable {
+          id: settingsFlick
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          contentWidth: width
+          contentHeight: settingsContent.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          interactive: contentHeight > height
+          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+          Column {
+            id: settingsContent
+            width: settingsFlick.width
+            spacing: Style.space(20)
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "OPEN LINKS"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: linkBehaviorDropdown
+                width: parent.width
+                showLabel: false
+                options: root.linkBehaviorOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.persistSettings({ linkBehavior: value }) }
+
+                // Binding element (not an inline binding) so it survives the
+                // imperative `value` write Dropdown makes on selection.
+                Binding on value { value: github.linkBehavior }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "REPOSITORY SCOPE"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: repositoryScopeDropdown
+                width: parent.width
+                showLabel: false
+                options: root.repositoryScopeOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.persistSettings({ repositoryScope: value }) }
+
+                Binding on value { value: String(root.setting("repositoryScope", "Owned")) }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
+                text: "REFRESH INTERVAL"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: refreshIntervalDropdown
+                width: parent.width
+                showLabel: false
+                options: root.refreshIntervalOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.persistSettings({ refreshIntervalSec: parseInt(value, 10) }) }
+
+                // Dropdown values are strings, so the integer round-trips.
+                Binding on value { value: String(root.setting("refreshIntervalSec", 900)) }
+              }
+            }
+
+            PanelSeparator {
+              width: parent.width
+              foreground: root.foreground
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Keep the bar icon unlit"
+              description: "Leave the Octocat dim even when notifications, reviews, or failing actions are waiting."
+              checked: github.iconAlwaysUnlit
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.persistSettings({ iconAlwaysUnlit: !github.iconAlwaysUnlit })
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Include archived repositories"
+              description: "Show repositories that have been archived on GitHub."
+              checked: root.setting("includeArchived", false) === true
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.persistSettings({ includeArchived: !(root.setting("includeArchived", false) === true) })
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Include forked repositories"
+              description: "Show repositories you forked from someone else."
+              checked: root.setting("includeForks", false) === true
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.persistSettings({ includeForks: !(root.setting("includeForks", false) === true) })
+            }
+
+            Text {
+              width: parent.width
+              text: "The remaining options — Actions scanning, review request filters, and display limits — stay in Omarchy's bar widget settings."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
           }
         }
       }
