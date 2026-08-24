@@ -665,7 +665,7 @@ Panel {
               id: settingsBackButton
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
-              iconText: "\U000F004D"
+              iconText: "󰁍"
               tooltipText: "Back to the dashboard"
               foreground: root.foreground
               focusable: true
