@@ -58,9 +58,9 @@ Panel {
     { id: "actions", label: "Actions" }
   ]
   readonly property var sortModes: [
-    { id: "updated", label: "Updated" }, { id: "name", label: "Name" },
-    { id: "stars", label: "Stars" }, { id: "issues", label: "Issues" },
-    { id: "prs", label: "PRs" }, { id: "actions", label: "Actions" }
+    { value: "updated", label: "Updated" }, { value: "name", label: "Name" },
+    { value: "stars", label: "Stars" }, { value: "issues", label: "Issues" },
+    { value: "prs", label: "PRs" }, { value: "actions", label: "Actions" }
   ]
   readonly property var displayedRepositories: filteredRepositories()
   readonly property var cursorTargets: buildCursorTargets()
@@ -126,7 +126,7 @@ Panel {
     if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))
   }
   function applyPanelWheel(event) {
-    if (!panelFlick || (sortPicker && sortPicker.popup.visible)) return false
+    if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false
     var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
     if (maxY <= 0) return false
     var pixel = event.pixelDelta.y
@@ -208,7 +208,7 @@ Panel {
     linkBehaviorDropdown.close()
     repositoryScopeDropdown.close()
     refreshIntervalDropdown.close()
-    if (sortPicker) sortPicker.popup.close()
+    if (sortPicker) sortPicker.close()
     pageFlip.restart()
   }
 
@@ -312,7 +312,7 @@ Panel {
       anchors.fill: parent
       // Settings controls own their native focus chain and keys. The settings
       // page carries its own Escape handler to return to the dashboard.
-      blocked: root.settingsOpen || search.activeFocus || sortPicker.popup.visible
+      blocked: root.settingsOpen || search.activeFocus || sortPicker.popupOpen
       onMoveRequested: function(dx, dy) { if (root.settingsOpen) return; if (dy !== 0) root.moveCursor(dy) }
       onActivateRequested: if (!root.settingsOpen) root.activateCursor()
       onCloseRequested: if (root.settingsOpen) root.showSettings(false); else root.close()
@@ -604,16 +604,15 @@ Panel {
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
-            ComboBox {
+            Dropdown {
               id: sortPicker
               Layout.fillWidth: true
-              model: root.sortModes
-              textRole: "label"
-              currentIndex: {
-                for (var i = 0; i < root.sortModes.length; i++) if (root.sortModes[i].id === root.sortMode) return i
-                return 0
-              }
-              onActivated: function(index) { root.sortMode = root.sortModes[index].id }
+              value: root.sortMode
+              options: root.sortModes
+              showLabel: false
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onChanged: function(v) { root.sortMode = v }
             }
           }
 
