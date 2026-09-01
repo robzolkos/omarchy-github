@@ -607,7 +607,7 @@ Panel {
             Dropdown {
               id: sortPicker
               Layout.fillWidth: true
-              value: root.sortMode
+              Binding on value { value: root.sortMode }
               options: root.sortModes
               showLabel: false
               foreground: root.foreground
