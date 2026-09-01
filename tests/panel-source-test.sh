@@ -86,7 +86,7 @@ assert_contains $'text: "󰅂"\n        tooltipText: "Next notifications"' \
 assert_contains $'text: (section.page + 1) + " / " + section.pageCount\n        height: previousPageButton.height\n        color: root.dim' \
   "notification page number is not vertically centered with its controls"
 
-assert_contains $'function applyPanelWheel(event) {\n    if (!panelFlick || (sortPicker && sortPicker.popup.visible)) return false' \
+assert_contains $'function applyPanelWheel(event) {\n    if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false' \
   "the panel still uses Flickable's default wheel distance"
 assert_contains $'panelFlick.contentY = Math.max(0, Math.min(maxY, panelFlick.contentY - wheel.steps * Style.space(80)))' \
   "a mouse-wheel notch does not move about one row"
