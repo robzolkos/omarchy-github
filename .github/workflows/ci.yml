@@ -25,8 +25,14 @@ jobs:
       - name: Validate manifest
         run: jq empty manifest.json
 
-      - name: Run helper tests
-        run: tests/helper-test.sh
+      - name: Run GitHub helper tests
+        run: tests/github-helper-test.sh
+
+      - name: Run GitLab helper tests
+        run: tests/gitlab-helper-test.sh
+
+      - name: Run schema parity tests
+        run: tests/schema-test.sh
 
       - name: Run panel source tests
         run: tests/panel-source-test.sh

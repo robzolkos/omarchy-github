@@ -2,8 +2,11 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 
-// GitLab dashboard data service. The helper owns API pagination and aggregation;
-// this item schedules it and exposes one stable, defensive model to the panel.
+// Forge dashboard data service: one Service for either GitHub or a GitLab
+// instance, selected by the `provider` setting. Each helper (omarchy-github-fetch,
+// omarchy-gitlab-fetch) emits the same top-level JSON shape (see
+// tests/schema-test.sh), so everything below except helperPath(), command(),
+// and the two mark-all-read implementations is provider-agnostic.
 Item {
     id: root
 
@@ -11,20 +14,20 @@ Item {
     })
     property bool loading: false
     property string state: "loading"
-    property string message: "Loading GitLab…"
+    property string message: "Loading…"
     property string host: ""
     property string login: ""
-    property string fetchedProjectScope: "owned"
+    property string fetchedRepositoryScope: "owned"
     property string fetchedAt: ""
     property var notifications: []
     property int notificationsRevision: 0
     property var reviewRequests: []
     property var assignedIssues: []
-    property var myMergeRequests: []
-    property int myMergeRequestsTotal: 0
-    property var pipelines: []
-    property var failedPipelines: []
-    property var projects: []
+    property var authored: []
+    property int authoredTotal: 0
+    property var runs: []
+    property var failedRuns: []
+    property var repositories: []
     property var warnings: []
     property var rateLimit: null
     property string _stdout: ""
@@ -36,10 +39,10 @@ Item {
     property string notificationActionStatus: ""
     property string _markStdout: ""
     property string _markStderr: ""
-    // Thread IDs waiting for the mark-as-done round trip after GitLab confirmed
-    // them locally. An in-flight refresh must not restore these rows, or the
-    // bar stays lit until the next poll even though the user already opened or
-    // marked the notification.
+    // Thread/todo IDs waiting for the mark-as-read round trip after the forge
+    // confirmed them locally. An in-flight refresh must not restore these
+    // rows, or the bar stays lit until the next poll even though the user
+    // already opened or marked the notification.
     property var hiddenNotifications: ({})
     property var markQueue: []
     // Single-notification and bulk marking share one process, so the panel
@@ -49,25 +52,28 @@ Item {
     readonly property bool marking: markProcess.running
     readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 900, 60, 3600)
     readonly property int unreadCount: notifications.length
-    readonly property int pipelineCount: pipelines.length
-    // A broken pipeline on your own merge request is the kind of thing the bar
-    // icon exists to surface, so it counts toward the alarming state. Drafts
-    // are excluded: a red pipeline on work you have not offered up yet is
-    // expected, and it would leave the icon permanently lit.
-    readonly property int failingMergeRequestCount: myMergeRequests.filter(function(item) {
+    readonly property int runCount: runs.length
+    // A broken check/pipeline on your own pull or merge request is the kind of
+    // thing the bar icon exists to surface, so it counts toward the alarming
+    // state. Drafts are excluded: a red check on work you have not offered up
+    // yet is expected, and it would leave the icon permanently lit.
+    readonly property int failingAuthoredCount: authored.filter(function(item) {
         return !item.draft && root.isBrokenCheck(item.checks);
     }).length
     readonly property bool iconAlwaysUnlit: boolSetting("iconAlwaysUnlit", false)
     // An unrecognised value falls back to the web app window rather than the
     // browser, so a stale entry cannot silently revert the default behaviour.
     readonly property string linkBehavior: String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"
-    readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || pipelineCount > 0 || reviewRequests.length > 0 || failingMergeRequestCount > 0)
+    readonly property bool alarming: !iconAlwaysUnlit && (unreadCount > 0 || runCount > 0 || reviewRequests.length > 0 || failingAuthoredCount > 0)
+    // An unrecognised value falls back to GitHub rather than silently pointing
+    // at whichever provider happened to run last.
+    readonly property string provider: String(setting("provider", "GitHub")).toLowerCase() === "gitlab" ? "gitlab" : "github"
 
-    // Pipeline status groupings live here so the alarming count, the row label
-    // and the row glyph cannot drift apart when a state is reclassified. The
-    // helper already folds GitLab's pipeline status enum down to this
-    // GitHub-shaped vocabulary (FAILURE/PENDING/SUCCESS/NONE) so this logic
-    // stays identical to the check-rollup handling it started from.
+    // Check/pipeline status groupings live here so the alarming count, the row
+    // label, and the row glyph cannot drift apart when a state is
+    // reclassified. omarchy-gitlab-fetch already folds GitLab's own pipeline
+    // status enum down into this GitHub-shaped vocabulary before it ever
+    // reaches the service, so this logic is shared unchanged.
     function isBrokenCheck(checks) {
         var value = String(checks || "");
         return value === "FAILURE" || value === "ERROR";
@@ -101,33 +107,36 @@ Item {
     }
 
     // Matched against the known options rather than by substring, so an option
-    // added later falls back to the narrower scope instead of silently widening
-    // it. `fetchedProjectScope` reports what the last payload contained.
-    function projectScopeMode() {
-        return String(setting("projectScope", "Owned")).toLowerCase() === "member of" ? "membership" : "owned";
+    // added later falls back to the narrower scope instead of silently
+    // widening it. `fetchedRepositoryScope` reports what the last payload was
+    // actually fetched with.
+    function repositoryScopeMode() {
+        return String(setting("repositoryScope", "Owned")).toLowerCase() === "wider" ? "wider" : "owned";
     }
 
-    function pipelineScanMode() {
-        var value = String(setting("pipelineScanBehavior", "Recent projects")).toLowerCase();
+    function scanMode() {
+        var value = String(setting("scanBehavior", "Recent")).toLowerCase();
         if (value === "off")
             return "off";
 
-        if (value === "all projects")
+        if (value === "all")
             return "all";
 
         return "recent";
     }
 
     function helperPath() {
-        return decodeURIComponent(Qt.resolvedUrl("omarchy-gitlab-fetch").toString().replace(/^file:\/\//, ""));
+        var name = root.provider === "gitlab" ? "omarchy-gitlab-fetch" : "omarchy-github-fetch";
+        return decodeURIComponent(Qt.resolvedUrl(name).toString().replace(/^file:\/\//, ""));
     }
 
     function command() {
-        var args = [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--project-scope", projectScopeMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--pipeline-scan", pipelineScanMode(), "--pipeline-scan-limit", String(intSetting("pipelineScanProjectLimit", 15, 5, 200)), "--concurrency", String(intSetting("pipelineScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedPipelineDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedPipelineLimit", 20, 1, 100))];
-        var hostSetting = String(setting("gitlabHost", "")).trim();
-        if (hostSetting !== "")
-            args.push("--hostname", hostSetting);
-
+        var args = [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryScopeMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--scan", scanMode(), "--scan-limit", String(intSetting("scanLimit", 15, 5, 200)), "--concurrency", String(intSetting("scanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedLimit", 20, 1, 100))];
+        if (root.provider === "gitlab") {
+            var hostSetting = String(setting("gitlabHost", "")).trim();
+            if (hostSetting !== "")
+                args.push("--hostname", hostSetting);
+        }
         return args;
     }
 
@@ -272,29 +281,68 @@ Item {
         fetchProcess.running = true;
     }
 
+    // Switching providers must not leave the previous provider's rows on
+    // screen under the new provider's terminology, and must not let a queued
+    // mark or a hidden-notification snapshot from the old provider reach the
+    // new provider's helper (a GitHub thread id sent to `glab`, for example).
+    // refresh() below only queues if a fetch/mark is already in flight; the
+    // apply() guard above discards that in-flight response if it lands after
+    // this handler has already moved the service on.
+    onProviderChanged: {
+        notifications = [];
+        hiddenNotifications = {};
+        markQueue = [];
+        markingAllNotificationIds = [];
+        notificationsRevision++;
+        reviewRequests = [];
+        assignedIssues = [];
+        authored = [];
+        authoredTotal = 0;
+        runs = [];
+        failedRuns = [];
+        repositories = [];
+        warnings = [];
+        rateLimit = null;
+        host = "";
+        login = "";
+        state = "loading";
+        message = "Loading…";
+        refresh();
+    }
+
+    // A fetch started under the previous provider can still be in flight when
+    // the setting flips (onProviderChanged only queues a new refresh; it does
+    // not, and cannot, kill the running process). Its response must never
+    // land: showing GitHub rows under GitLab terminology, or vice versa, is
+    // exactly the bug this whole feature must not have. The already-queued
+    // refresh (see onProviderChanged) supersedes it once this process exits.
     function apply(raw) {
         try {
             var data = JSON.parse(String(raw || ""));
+            var payloadProvider = String(data.provider || "");
+            if (payloadProvider !== "" && payloadProvider !== root.provider)
+                return ;
+
             state = String(data.state || "error");
             message = String(data.message || "");
             host = String(data.host || "");
             login = String(data.login || "");
-            fetchedProjectScope = String(data.projectScope || "owned");
+            fetchedRepositoryScope = String(data.repositoryScope || "owned");
             fetchedAt = String(data.fetchedAt || "");
             notifications = visibleNotifications(data.notifications);
             notificationsRevision++;
             reviewRequests = Array.isArray(data.reviewRequests) ? data.reviewRequests : [];
             assignedIssues = Array.isArray(data.assignedIssues) ? data.assignedIssues : [];
-            myMergeRequests = Array.isArray(data.myMergeRequests) ? data.myMergeRequests : [];
-            myMergeRequestsTotal = Number(data.myMergeRequestsTotal) || myMergeRequests.length;
-            pipelines = Array.isArray(data.pipelines) ? data.pipelines : [];
-            failedPipelines = Array.isArray(data.failedPipelines) ? data.failedPipelines : [];
-            projects = Array.isArray(data.projects) ? data.projects : [];
+            authored = Array.isArray(data.authored) ? data.authored : [];
+            authoredTotal = Number(data.authoredTotal) || authored.length;
+            runs = Array.isArray(data.runs) ? data.runs : [];
+            failedRuns = Array.isArray(data.failedRuns) ? data.failedRuns : [];
+            repositories = Array.isArray(data.repositories) ? data.repositories : [];
             warnings = Array.isArray(data.warnings) ? data.warnings : [];
             rateLimit = data.rateLimit || null;
         } catch (error) {
             state = "error";
-            message = "GitLab returned an unreadable response.";
+            message = "The refresh returned an unreadable response.";
             warnings = [String(error)];
         }
     }
@@ -304,36 +352,81 @@ Item {
         if (value === "")
             return ;
 
-        // Drop the row before GitLab round-trips. Opening a notification while
-        // a refresh is already running used to no-op, so the icon stayed
+        // Drop the row before the round trip. Opening a notification while a
+        // refresh is already running used to no-op, so the icon stayed
         // alarming until the next poll even after the user had seen it.
         hideNotification(value);
         enqueueMark(value);
         startQueuedMark();
     }
 
-    // Capture the exact displayed set on the first click. The panel binds
+    function canonicalNotificationTimestamp(value) {
+        var text = String(value || "");
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(text))
+            return "";
+
+        var milliseconds = Date.parse(text);
+        if (!isFinite(milliseconds) || new Date(milliseconds).toISOString().replace(".000Z", "Z") !== text)
+            return "";
+
+        return milliseconds <= Date.now() ? text : "";
+    }
+
+    // Capture the exact displayed snapshot on the first click. The panel binds
     // confirmation to notificationsRevision, so any refresh invalidates this
-    // prepared value before the destructive second click can run. Unlike
-    // GitHub, GitLab has no "mark everything before a timestamp" endpoint, so
-    // there is no same-second boundary to protect: every displayed id is
-    // marked done individually and a notification that arrives mid-confirm
-    // simply is not in the snapshot.
+    // prepared value before the destructive second click can run.
+    //
+    // GitHub can mark everything before a timestamp boundary in one request,
+    // preserving same-second arrivals by re-marking only the fetched boundary
+    // IDs individually. GitLab's to-do API has no such boundary endpoint, so
+    // its snapshot is simply every displayed ID, marked individually; a
+    // notification that arrives mid-confirmation is never in that set and
+    // stays unread, which is strictly safer than GitHub's same-second edge
+    // case. This is the one place the two providers genuinely disagree, so it
+    // stays as two explicit implementations rather than a shared one.
     function prepareMarkAllNotificationsRead() {
         if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)
             return "";
 
-        var ids = [];
-        for (var i = 0; i < notifications.length; i++) {
-            var id = String(notifications[i].id || "");
-            if (!/^\d+$/.test(id)) {
+        if (root.provider === "gitlab") {
+            var ids = [];
+            for (var i = 0; i < notifications.length; i++) {
+                var id = String(notifications[i].id || "");
+                if (!/^\d+$/.test(id)) {
+                    notificationActionStatus = "Refresh before marking everything read.";
+                    actionStatusTimer.restart();
+                    return "";
+                }
+                ids.push(id);
+            }
+            return JSON.stringify({ids: ids, revision: notificationsRevision});
+        }
+
+        var boundary = "";
+        for (var j = 0; j < notifications.length; j++) {
+            var updated = canonicalNotificationTimestamp(notifications[j].updatedAt);
+            if (updated === "") {
                 notificationActionStatus = "Refresh before marking everything read.";
                 actionStatusTimer.restart();
                 return "";
             }
-            ids.push(id);
+            if (updated > boundary)
+                boundary = updated;
         }
-        return JSON.stringify({ids: ids, revision: notificationsRevision});
+
+        var boundaryIds = [];
+        for (var k = 0; k < notifications.length; k++) {
+            if (String(notifications[k].updatedAt || "") !== boundary)
+                continue;
+            var boundaryId = String(notifications[k].id || "");
+            if (!/^\d+$/.test(boundaryId)) {
+                notificationActionStatus = "Refresh before marking everything read.";
+                actionStatusTimer.restart();
+                return "";
+            }
+            boundaryIds.push(boundaryId);
+        }
+        return JSON.stringify({boundary: boundary, boundaryIds: boundaryIds, revision: notificationsRevision});
     }
 
     function markAllNotificationsRead(prepared) {
@@ -364,9 +457,16 @@ Item {
         notificationActionStatus = "Marking all notifications read…";
         _markStdout = "";
         _markStderr = "";
-        var commandLine = [helperPath()];
-        for (var i = 0; i < snapshot.ids.length; i++)
-            commandLine.push("--mark-notification-read", String(snapshot.ids[i]));
+        var commandLine;
+        if (root.provider === "gitlab") {
+            commandLine = [helperPath()];
+            for (var i = 0; i < snapshot.ids.length; i++)
+                commandLine.push("--mark-notification-read", String(snapshot.ids[i]));
+        } else {
+            commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];
+            for (var j = 0; j < snapshot.boundaryIds.length; j++)
+                commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[j]));
+        }
         markProcess.command = commandLine;
         markProcess.running = true;
     }
@@ -402,7 +502,7 @@ Item {
                 root.apply(stdout);
             } else {
                 root.state = "error";
-                root.message = stderr !== "" ? stderr : "GitLab data refresh failed.";
+                root.message = stderr !== "" ? stderr : "Data refresh failed.";
             }
             if (root.startQueuedMark())
                 return ;
@@ -459,7 +559,7 @@ Item {
             if (root.startQueuedMark())
                 return ;
 
-            // GitLab is authoritative after every attempt. This reconciles
+            // The forge is authoritative after every attempt. This reconciles
             // successful, failed, and partially completed bulk operations.
             root.refreshQueued = false;
             Qt.callLater(root.refresh);

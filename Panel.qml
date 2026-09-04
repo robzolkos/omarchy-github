@@ -8,8 +8,8 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "pranavbabu.gitlab"
-  ipcTarget: "pranavbabu.gitlab"
+  moduleName: "pranavbabu.forge"
+  ipcTarget: "pranavbabu.forge"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -23,21 +23,21 @@ Panel {
   property int cursorIndex: 0
   property int notificationsPage: 0
   property bool reviewsExpanded: false
-  property bool myMergeRequestsExpanded: false
+  property bool authoredExpanded: false
   property bool issuesExpanded: false
-  property bool pipelinesExpanded: false
+  property bool runsExpanded: false
   property bool failuresExpanded: false
   // settingsOpen is the page on screen; pendingSettingsOpen is the page the
   // in-flight flip will land on, since the swap happens edge-on at 90 degrees.
   property bool settingsOpen: false
   property bool pendingSettingsOpen: false
+  readonly property var providerOptions: [
+    { value: "GitHub", label: "GitHub" },
+    { value: "GitLab", label: "GitLab" }
+  ]
   readonly property var linkBehaviorOptions: [
     { value: "Web app window", label: "Web app window" },
     { value: "Browser tab", label: "Browser tab" }
-  ]
-  readonly property var projectScopeOptions: [
-    { value: "Owned", label: "Owned projects" },
-    { value: "Member of", label: "Member of" }
   ]
   readonly property var refreshIntervalOptions: [
     { value: "300", label: "Every 5 minutes" },
@@ -46,6 +46,58 @@ Panel {
     { value: "1800", label: "Every 30 minutes" },
     { value: "3600", label: "Every hour" }
   ]
+  // Every string and icon that differs between providers lives here, so the
+  // rest of the panel reads root.term.xxx instead of branching on provider
+  // itself. The two providers otherwise share this file's structure exactly.
+  readonly property var githubTerms: ({
+    name: "GitHub",
+    icon: "",
+    itemGlyph: "",
+    refPrefix: " #",
+    myItemsTitle: "MY PULL REQUESTS",
+    runningTitle: "RUNNING ACTIONS",
+    failedTitle: "RECENT FAILED ACTIONS",
+    itemFilterLabel: "PRs",
+    activeMetricLabel: "Actions",
+    repoNoun: "repositories",
+    repoNounTitle: "REPOSITORIES",
+    ownedRepoNounTitle: "OWNED REPOSITORIES",
+    filterPlaceholder: "Filter repositories  /",
+    scopeOptions: [
+      { value: "Owned", label: "Owned repositories" },
+      { value: "Wider", label: "Owned and organizations" }
+    ],
+    archivedDesc: "Show repositories that have been archived on GitHub.",
+    forksDesc: "Show repositories you forked from someone else.",
+    unlitDesc: "Leave the icon dim even when notifications, reviews, or failing actions are waiting.",
+    remainingOptionsText: "The remaining options — Actions scanning, review request filters, and display limits — stay in Omarchy's bar widget settings.",
+    openInLabel: "Open in GitHub  󰅂"
+  })
+  readonly property var gitlabTerms: ({
+    name: "GitLab",
+    icon: "󰮠",
+    itemGlyph: "󰘭",
+    refPrefix: " !",
+    myItemsTitle: "MY MERGE REQUESTS",
+    runningTitle: "RUNNING PIPELINES",
+    failedTitle: "RECENT FAILED PIPELINES",
+    itemFilterLabel: "MRs",
+    activeMetricLabel: "Pipelines",
+    repoNoun: "projects",
+    repoNounTitle: "PROJECTS",
+    ownedRepoNounTitle: "OWNED PROJECTS",
+    filterPlaceholder: "Filter projects  /",
+    scopeOptions: [
+      { value: "Owned", label: "Owned projects" },
+      { value: "Wider", label: "Member of" }
+    ],
+    archivedDesc: "Show projects that have been archived on GitLab.",
+    forksDesc: "Show projects you forked from someone else.",
+    unlitDesc: "Leave the icon dim even when notifications, reviews, or failing pipelines are waiting.",
+    remainingOptionsText: "The remaining options — pipeline scanning, review request filters, and display limits — stay in Omarchy's bar widget settings.",
+    openInLabel: "Open in GitLab  󰅂"
+  })
+  readonly property var term: svc.provider === "gitlab" ? gitlabTerms : githubTerms
   // Carry sub-notch wheel deltas between events. Touchpads emit many small
   // angleDeltas; mice often emit a fake 1–2px pixelDelta that would otherwise
   // crawl the dashboard a couple of pixels per click.
@@ -54,15 +106,15 @@ Panel {
   readonly property int activityExpandedCount: 25
   readonly property var metricFilters: [
     { id: "all", label: "All" }, { id: "issues", label: "Issues" },
-    { id: "prs", label: "MRs" }, { id: "stars", label: "Stars" },
-    { id: "pipelines", label: "Pipelines" }
+    { id: "prs", label: root.term.itemFilterLabel }, { id: "stars", label: "Stars" },
+    { id: "runs", label: root.term.activeMetricLabel }
   ]
   readonly property var sortModes: [
     { value: "updated", label: "Updated" }, { value: "name", label: "Name" },
     { value: "stars", label: "Stars" }, { value: "issues", label: "Issues" },
-    { value: "prs", label: "MRs" }, { value: "pipelines", label: "Pipelines" }
+    { value: "prs", label: root.term.itemFilterLabel }, { value: "runs", label: root.term.activeMetricLabel }
   ]
-  readonly property var displayedProjects: filteredProjects()
+  readonly property var displayedRepositories: filteredRepositories()
   readonly property var cursorTargets: buildCursorTargets()
   readonly property var selectedTarget: cursorTargets.length > 0 ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))] : null
 
@@ -71,14 +123,14 @@ Panel {
   }
 
   function notificationPageCount() {
-    return Math.max(1, Math.ceil(gitlab.notifications.length / activityPreviewCount))
+    return Math.max(1, Math.ceil(svc.notifications.length / activityPreviewCount))
   }
 
   function notificationRows() {
     var page = Math.max(0, Math.min(notificationsPage, notificationPageCount() - 1))
     if (page !== notificationsPage) notificationsPage = page
     var start = page * activityPreviewCount
-    return gitlab.notifications.slice(start, start + activityPreviewCount)
+    return svc.notifications.slice(start, start + activityPreviewCount)
   }
 
   function buildCursorTargets() {
@@ -87,12 +139,12 @@ Panel {
       for (var i = 0; i < rows.length; i++) targets.push({ key: kind + ":" + String(rows[i].id || rows[i].url || i), kind: kind, row: rows[i] })
     }
     add("notification", notificationRows())
-    add("review", sectionRows(gitlab.reviewRequests, reviewsExpanded))
-    add("mymr", sectionRows(gitlab.myMergeRequests, myMergeRequestsExpanded))
-    add("issue", sectionRows(gitlab.assignedIssues, issuesExpanded))
-    add("pipeline", sectionRows(gitlab.pipelines, pipelinesExpanded))
-    add("failedpipeline", sectionRows(gitlab.failedPipelines, failuresExpanded))
-    add("project", displayedProjects)
+    add("review", sectionRows(svc.reviewRequests, reviewsExpanded))
+    add("authored", sectionRows(svc.authored, authoredExpanded))
+    add("issue", sectionRows(svc.assignedIssues, issuesExpanded))
+    add("run", sectionRows(svc.runs, runsExpanded))
+    add("failedrun", sectionRows(svc.failedRuns, failuresExpanded))
+    add("repo", displayedRepositories)
     return targets
   }
 
@@ -120,10 +172,10 @@ Panel {
     var target = String(url || "")
     var notificationId = String(id || "")
     openUrl(target)
-    if (kind === "notification") gitlab.markNotificationRead(notificationId)
+    if (kind === "notification") svc.markNotificationRead(notificationId)
   }
   function markSelectedRead() {
-    if (selectedTarget && selectedTarget.kind === "notification") gitlab.markNotificationRead(String(selectedTarget.row.id || ""))
+    if (selectedTarget && selectedTarget.kind === "notification") svc.markNotificationRead(String(selectedTarget.row.id || ""))
   }
   function applyPanelWheel(event) {
     if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false
@@ -169,17 +221,17 @@ Panel {
   function checkLabel(checks) {
     if (checks === "SUCCESS") return "checks passing"
     if (checks === "ERROR") return "checks errored"
-    if (gitlab.isBrokenCheck(checks)) return "checks failing"
-    if (gitlab.isRunningCheck(checks)) return "checks running"
+    if (svc.isBrokenCheck(checks)) return "checks failing"
+    if (svc.isRunningCheck(checks)) return "checks running"
     return "no checks"
   }
 
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
-    // omarchy-launch-webapp gives GitLab its own window; omarchy-launch-browser
+    // omarchy-launch-webapp gives the forge its own window; omarchy-launch-browser
     // hands the URL to the default browser for those without a Chromium-based one.
-    if (gitlab.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])
+    if (svc.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])
     else Quickshell.execDetached(["omarchy-launch-webapp", value])
     close()
   }
@@ -205,34 +257,35 @@ Panel {
     if (settingsOpen === next || pageFlip.running) return
     pendingSettingsOpen = next
     // A popup left open would float over the card while it flips.
+    providerDropdown.close()
     linkBehaviorDropdown.close()
-    projectScopeDropdown.close()
+    repositoryScopeDropdown.close()
     refreshIntervalDropdown.close()
     if (sortPicker) sortPicker.close()
     pageFlip.restart()
   }
 
-  function filteredProjects() {
+  function filteredRepositories() {
     var needle = String(query || "").trim().toLowerCase()
     var rows = []
-    for (var i = 0; i < gitlab.projects.length; i++) {
-      var project = gitlab.projects[i]
-      if (needle !== "" && String(project.nameWithOwner || project.name || "").toLowerCase().indexOf(needle) === -1) continue
-      if (metricFilter === "issues" && Number(project.issues || 0) <= 0) continue
-      if (metricFilter === "prs" && Number(project.prs || 0) <= 0) continue
-      if (metricFilter === "stars" && Number(project.stars || 0) <= 0) continue
-      if (metricFilter === "pipelines" && Number(project.activePipelines || 0) <= 0) continue
-      rows.push(project)
+    for (var i = 0; i < svc.repositories.length; i++) {
+      var repo = svc.repositories[i]
+      if (needle !== "" && String(repo.nameWithOwner || repo.name || "").toLowerCase().indexOf(needle) === -1) continue
+      if (metricFilter === "issues" && Number(repo.issues || 0) <= 0) continue
+      if (metricFilter === "prs" && Number(repo.prs || 0) <= 0) continue
+      if (metricFilter === "stars" && Number(repo.stars || 0) <= 0) continue
+      if (metricFilter === "runs" && Number(repo.activeRuns || 0) <= 0) continue
+      rows.push(repo)
     }
     rows.sort(function(a, b) {
       if (sortMode === "name") return String(a.nameWithOwner).localeCompare(String(b.nameWithOwner))
       if (sortMode === "updated") return String(b.updatedAt).localeCompare(String(a.updatedAt))
-      var av = Number(a[sortMode] || (sortMode === "pipelines" ? a.activePipelines : 0) || 0)
-      var bv = Number(b[sortMode] || (sortMode === "pipelines" ? b.activePipelines : 0) || 0)
+      var av = Number(a[sortMode] || (sortMode === "runs" ? a.activeRuns : 0) || 0)
+      var bv = Number(b[sortMode] || (sortMode === "runs" ? b.activeRuns : 0) || 0)
       if (av !== bv) return bv - av
       return String(a.nameWithOwner).localeCompare(String(b.nameWithOwner))
     })
-    return rows.slice(0, Math.max(10, Number(setting("maxDisplayedProjects", 25))))
+    return rows.slice(0, Math.max(10, Number(setting("maxDisplayedRepositories", 25))))
   }
 
   function relativeTime(value) {
@@ -244,6 +297,21 @@ Panel {
     if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago"
     if (seconds < 2592000) return Math.floor(seconds / 86400) + "d ago"
     return Math.floor(seconds / 2592000) + "mo ago"
+  }
+
+  // Static per-provider defaults; svc.host is authoritative once a payload
+  // has actually been fetched but is empty until then.
+  function notificationsUrl() {
+    return svc.provider === "gitlab" ? (svc.host || "https://gitlab.com") + "/dashboard/todos" : "https://github.com/notifications"
+  }
+  function reviewsUrl() {
+    return svc.provider === "gitlab" ? (svc.host || "https://gitlab.com") + "/dashboard/merge_requests?reviewer_username=" + svc.login : "https://github.com/pulls/review-requested"
+  }
+  function myItemsUrl() {
+    return svc.provider === "gitlab" ? (svc.host || "https://gitlab.com") + "/dashboard/merge_requests?author_username=" + svc.login : "https://github.com/pulls"
+  }
+  function issuesUrl() {
+    return svc.provider === "gitlab" ? (svc.host || "https://gitlab.com") + "/dashboard/issues?assignee_username=" + svc.login : "https://github.com/issues/assigned"
   }
 
   implicitWidth: button.implicitWidth
@@ -264,13 +332,13 @@ Panel {
       cursorActive = false
       cursorIndex = 0
       if (panelFlick) panelFlick.contentY = 0
-      gitlab.refresh()
+      svc.refresh()
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     }
   }
   onCursorTargetsChanged: ensureCursor()
 
-  Service { id: gitlab; settings: root.settings }
+  Service { id: svc; settings: root.settings }
 
   IpcHandler {
     target: root.ipcTarget
@@ -279,18 +347,18 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { gitlab.refresh(); return "ok" }
-    function status(): string { return gitlab.state }
+    function refresh(): string { svc.refresh(); return "ok" }
+    function status(): string { return svc.state }
   }
 
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰮠"
-    active: gitlab.alarming
+    text: root.term.icon
+    active: svc.alarming
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) gitlab.refresh()
+      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) svc.refresh()
       else root.toggle()
     }
   }
@@ -325,7 +393,7 @@ Panel {
       }
       onTextKey: function(text) {
         if (root.settingsOpen) return
-        if (text === "r" || text === "R") gitlab.refresh()
+        if (text === "r" || text === "R") svc.refresh()
         else if (text === "/") Qt.callLater(function() { search.forceActiveFocus() })
         else if (text === "m" || text === "M") root.markSelectedRead()
       }
@@ -356,7 +424,7 @@ Panel {
           // Focus lands on the first setting so Tab walks forward through the
           // form, and Qt.callLater waits for the visibility pass to finish.
           script: Qt.callLater(function() {
-            if (root.settingsOpen) linkBehaviorDropdown.forceActiveFocus()
+            if (root.settingsOpen) providerDropdown.forceActiveFocus()
             else keyCatcher.forceActiveFocus()
           })
         }
@@ -391,12 +459,12 @@ Panel {
 
           PanelHero {
             width: parent.width
-            title: gitlab.login !== "" ? "GitLab · " + gitlab.login : "GitLab"
+            title: svc.login !== "" ? root.term.name + " · " + svc.login : root.term.name
             // Mirrors every term of the alarming state, so the summary always
             // explains why the bar icon is lit.
-            meta: gitlab.loading ? "Refreshing dashboard…" : (gitlab.state === "ready" ?
-              gitlab.unreadCount + " unread · " + gitlab.reviewRequests.length + " reviews · " + gitlab.pipelineCount + " active pipelines"
-                + (gitlab.failingMergeRequestCount > 0 ? " · " + gitlab.failingMergeRequestCount + " failing" : "") : gitlab.message)
+            meta: svc.loading ? "Refreshing dashboard…" : (svc.state === "ready" ?
+              svc.unreadCount + " unread · " + svc.reviewRequests.length + " reviews · " + svc.runCount + " active " + root.term.activeMetricLabel.toLowerCase()
+                + (svc.failingAuthoredCount > 0 ? " · " + svc.failingAuthoredCount + " failing" : "") : svc.message)
             foreground: root.foreground
             fontFamily: root.fontFamily
             // The hero reserves the trailing space and centres the control
@@ -404,7 +472,7 @@ Panel {
             trailingControl: Component {
               PanelActionButton {
                 iconText: "󰒓"
-                tooltipText: "GitLab settings"
+                tooltipText: root.term.name + " settings"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: root.showSettings(true)
@@ -412,7 +480,7 @@ Panel {
             }
             iconComponent: Component {
               Text {
-                text: "󰮠"
+                text: root.term.icon
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
@@ -423,9 +491,9 @@ Panel {
           }
 
           Text {
-            visible: gitlab.notificationActionStatus !== ""
+            visible: svc.notificationActionStatus !== ""
             width: parent.width
-            text: gitlab.notificationActionStatus
+            text: svc.notificationActionStatus
             textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
@@ -435,7 +503,7 @@ Panel {
           }
 
           BorderSurface {
-            visible: gitlab.state !== "ready" || gitlab.warnings.length > 0
+            visible: svc.state !== "ready" || svc.warnings.length > 0
             width: parent.width
             implicitHeight: statusText.implicitHeight + Style.space(20)
             color: Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.10)
@@ -449,13 +517,13 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               anchors.margins: Style.space(10)
               text: {
-                if (gitlab.state !== "ready") return gitlab.message
-                var summary = "Partial results · " + String(gitlab.warnings[0] || "A GitLab request failed.")
-                if (gitlab.warnings.length > 1) summary += " · " + (gitlab.warnings.length - 1) + " more"
+                if (svc.state !== "ready") return svc.message
+                var summary = "Partial results · " + String(svc.warnings[0] || "A request failed.")
+                if (svc.warnings.length > 1) summary += " · " + (svc.warnings.length - 1) + " more"
                 return summary
               }
               textFormat: Text.PlainText
-              color: gitlab.state === "ready" ? root.dim : root.urgent
+              color: svc.state === "ready" ? root.dim : root.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
@@ -465,81 +533,81 @@ Panel {
           DashboardSection {
             id: notificationsSection
             title: "UNREAD NOTIFICATIONS"
-            count: gitlab.notifications.length
-            emptyText: gitlab.state === "ready" ? "You're all caught up." : "No notifications loaded."
+            count: svc.notifications.length
+            emptyText: svc.state === "ready" ? "You're all caught up." : "No notifications loaded."
             model: root.notificationRows()
             showExpansionControl: false
             footerButtonsBordered: true
             page: root.notificationsPage
             pageCount: root.notificationPageCount()
-            openUrl: gitlab.host + "/dashboard/todos"
+            openUrl: root.notificationsUrl()
             onPreviousPage: root.notificationsPage = Math.max(0, root.notificationsPage - 1)
             onNextPage: root.notificationsPage = Math.min(root.notificationPageCount() - 1, root.notificationsPage + 1)
             delegateComponent: notificationDelegate
             actionText: "Mark all read"
             actionBusyText: "Marking…"
-            actionEnabled: gitlab.state === "ready" && !gitlab.loading
-            actionBusy: gitlab.marking
-            actionRevision: gitlab.notificationsRevision
-            actionPrepare: function() { return gitlab.prepareMarkAllNotificationsRead() }
-            onActionTriggered: function(prepared) { gitlab.markAllNotificationsRead(prepared) }
+            actionEnabled: svc.state === "ready" && !svc.loading
+            actionBusy: svc.marking
+            actionRevision: svc.notificationsRevision
+            actionPrepare: function() { return svc.prepareMarkAllNotificationsRead() }
+            onActionTriggered: function(prepared) { svc.markAllNotificationsRead(prepared) }
           }
 
           DashboardSection {
             visible: count > 0
             title: "REVIEW REQUESTS"
-            count: gitlab.reviewRequests.length
-            model: root.sectionRows(gitlab.reviewRequests, root.reviewsExpanded)
+            count: svc.reviewRequests.length
+            model: root.sectionRows(svc.reviewRequests, root.reviewsExpanded)
             expanded: root.reviewsExpanded
-            openUrl: gitlab.host + "/dashboard/merge_requests?reviewer_username=" + gitlab.login
+            openUrl: root.reviewsUrl()
             onToggleExpanded: root.reviewsExpanded = !root.reviewsExpanded
             delegateComponent: reviewDelegate
           }
 
           DashboardSection {
             visible: count > 0
-            title: "MY MERGE REQUESTS"
+            title: root.term.myItemsTitle
             // The query is capped at one page, so the fetched list can be
             // shorter than the real total. Show the total rather than implying
             // the section is complete.
-            count: Math.max(gitlab.myMergeRequestsTotal, gitlab.myMergeRequests.length)
-            model: root.sectionRows(gitlab.myMergeRequests, root.myMergeRequestsExpanded)
-            expanded: root.myMergeRequestsExpanded
-            openUrl: gitlab.host + "/dashboard/merge_requests?author_username=" + gitlab.login
-            onToggleExpanded: root.myMergeRequestsExpanded = !root.myMergeRequestsExpanded
-            delegateComponent: myMergeRequestDelegate
+            count: Math.max(svc.authoredTotal, svc.authored.length)
+            model: root.sectionRows(svc.authored, root.authoredExpanded)
+            expanded: root.authoredExpanded
+            openUrl: root.myItemsUrl()
+            onToggleExpanded: root.authoredExpanded = !root.authoredExpanded
+            delegateComponent: authoredDelegate
           }
 
           DashboardSection {
             visible: count > 0
             title: "ASSIGNED ISSUES"
-            count: gitlab.assignedIssues.length
-            model: root.sectionRows(gitlab.assignedIssues, root.issuesExpanded)
+            count: svc.assignedIssues.length
+            model: root.sectionRows(svc.assignedIssues, root.issuesExpanded)
             expanded: root.issuesExpanded
             footerButtonsBordered: true
-            openUrl: gitlab.host + "/dashboard/issues?assignee_username=" + gitlab.login
+            openUrl: root.issuesUrl()
             onToggleExpanded: root.issuesExpanded = !root.issuesExpanded
             delegateComponent: issueDelegate
           }
 
           DashboardSection {
             visible: count > 0
-            title: "RUNNING PIPELINES"
-            count: gitlab.pipelines.length
-            model: root.sectionRows(gitlab.pipelines, root.pipelinesExpanded)
-            expanded: root.pipelinesExpanded
-            onToggleExpanded: root.pipelinesExpanded = !root.pipelinesExpanded
-            delegateComponent: pipelineDelegate
+            title: root.term.runningTitle
+            count: svc.runs.length
+            model: root.sectionRows(svc.runs, root.runsExpanded)
+            expanded: root.runsExpanded
+            onToggleExpanded: root.runsExpanded = !root.runsExpanded
+            delegateComponent: runDelegate
           }
 
           DashboardSection {
             visible: count > 0
-            title: "RECENT FAILED PIPELINES"
-            count: gitlab.failedPipelines.length
-            model: root.sectionRows(gitlab.failedPipelines, root.failuresExpanded)
+            title: root.term.failedTitle
+            count: svc.failedRuns.length
+            model: root.sectionRows(svc.failedRuns, root.failuresExpanded)
             expanded: root.failuresExpanded
             onToggleExpanded: root.failuresExpanded = !root.failuresExpanded
-            delegateComponent: failedPipelineDelegate
+            delegateComponent: failedRunDelegate
           }
 
           PanelSeparator { foreground: root.foreground }
@@ -547,8 +615,8 @@ Panel {
           PanelSectionHeader {
             width: parent.width
             // Driven by the fetched scope, not the setting, so it cannot claim
-            // to list every membership project before a refresh brings them in.
-            text: (gitlab.fetchedProjectScope === "owned" ? "OWNED PROJECTS  " : "PROJECTS  ") + root.displayedProjects.length + "/" + gitlab.projects.length
+            // to list the wider scope before a refresh brings it in.
+            text: (svc.fetchedRepositoryScope === "owned" ? root.term.ownedRepoNounTitle : root.term.repoNounTitle) + "  " + root.displayedRepositories.length + "/" + svc.repositories.length
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -557,7 +625,7 @@ Panel {
             id: search
             width: parent.width
             foreground: root.foreground
-            placeholderText: "Filter projects  /"
+            placeholderText: root.term.filterPlaceholder
             text: root.query
             onTextChanged: root.query = text
             Keys.onEscapePressed: function(event) {
@@ -617,9 +685,9 @@ Panel {
           }
 
           Text {
-            visible: root.displayedProjects.length === 0
+            visible: root.displayedRepositories.length === 0
             width: parent.width
-            text: gitlab.projects.length === 0 ? "No projects loaded." : "No projects match these filters."
+            text: svc.repositories.length === 0 ? "No " + root.term.repoNoun + " loaded." : "No " + root.term.repoNoun + " match these filters."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -630,22 +698,22 @@ Panel {
             width: parent.width
             spacing: Style.space(4)
             Repeater {
-              model: root.displayedProjects
-              ProjectRow {
+              model: root.displayedRepositories
+              RepositoryRow {
                 required property var modelData
                 required property int index
                 width: parent.width
-                project: modelData
+                repo: modelData
                 rowIndex: index
               }
             }
           }
 
           Text {
-            visible: gitlab.rateLimit && gitlab.rateLimit.remaining !== undefined
+            visible: svc.rateLimit && svc.rateLimit.remaining !== undefined
             width: parent.width
-            text: "API requests remaining: " + (gitlab.rateLimit ? gitlab.rateLimit.remaining : "") +
-              (gitlab.fetchedAt !== "" ? " · updated " + root.relativeTime(gitlab.fetchedAt) : "")
+            text: "API requests remaining: " + (svc.rateLimit ? svc.rateLimit.remaining : "") +
+              (svc.fetchedAt !== "" ? " · updated " + root.relativeTime(svc.fetchedAt) : "")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -697,7 +765,7 @@ Panel {
               spacing: Style.space(3)
 
               Text {
-                text: "GITLAB SETTINGS"
+                text: root.term.name.toUpperCase() + " SETTINGS"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title
@@ -733,6 +801,33 @@ Panel {
               spacing: Style.space(6)
 
               Text {
+                text: "PROVIDER"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: providerDropdown
+                width: parent.width
+                showLabel: false
+                options: root.providerOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.persistSettings({ provider: value }) }
+
+                Binding on value { value: String(root.setting("provider", "GitHub")) }
+              }
+            }
+
+            Column {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Text {
                 text: "OPEN LINKS"
                 color: root.dim
                 font.family: root.fontFamily
@@ -753,7 +848,7 @@ Panel {
 
                 // Binding element (not an inline binding) so it survives the
                 // imperative `value` write Dropdown makes on selection.
-                Binding on value { value: gitlab.linkBehavior }
+                Binding on value { value: svc.linkBehavior }
               }
             }
 
@@ -762,7 +857,7 @@ Panel {
               spacing: Style.space(6)
 
               Text {
-                text: "PROJECT SCOPE"
+                text: "REPOSITORY SCOPE"
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -770,17 +865,17 @@ Panel {
               }
 
               Dropdown {
-                id: projectScopeDropdown
+                id: repositoryScopeDropdown
                 width: parent.width
                 showLabel: false
-                options: root.projectScopeOptions
+                options: root.term.scopeOptions
                 foreground: root.foreground
                 background: Color.popups.background
                 accent: Color.accent
                 fontFamily: root.fontFamily
-                onChanged: function(value) { root.persistSettings({ projectScope: value }) }
+                onChanged: function(value) { root.persistSettings({ repositoryScope: value }) }
 
-                Binding on value { value: String(root.setting("projectScope", "Owned")) }
+                Binding on value { value: String(root.setting("repositoryScope", "Owned")) }
               }
             }
 
@@ -820,18 +915,18 @@ Panel {
             Toggle {
               width: parent.width
               label: "Keep the bar icon unlit"
-              description: "Leave the icon dim even when notifications, reviews, or failing pipelines are waiting."
-              checked: gitlab.iconAlwaysUnlit
+              description: root.term.unlitDesc
+              checked: svc.iconAlwaysUnlit
               foreground: root.foreground
               accent: Color.accent
               fontFamily: root.fontFamily
-              onClicked: root.persistSettings({ iconAlwaysUnlit: !gitlab.iconAlwaysUnlit })
+              onClicked: root.persistSettings({ iconAlwaysUnlit: !svc.iconAlwaysUnlit })
             }
 
             Toggle {
               width: parent.width
-              label: "Include archived projects"
-              description: "Show projects that have been archived on GitLab."
+              label: "Include archived " + root.term.repoNoun
+              description: root.term.archivedDesc
               checked: root.setting("includeArchived", false) === true
               foreground: root.foreground
               accent: Color.accent
@@ -841,8 +936,8 @@ Panel {
 
             Toggle {
               width: parent.width
-              label: "Include forked projects"
-              description: "Show projects you forked from someone else."
+              label: "Include forked " + root.term.repoNoun
+              description: root.term.forksDesc
               checked: root.setting("includeForks", false) === true
               foreground: root.foreground
               accent: Color.accent
@@ -852,7 +947,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "The remaining options — pipeline scanning, review request filters, and display limits — stay in Omarchy's bar widget settings."
+              text: root.term.remainingOptionsText
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -873,7 +968,7 @@ Panel {
       rowKind: "notification"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      glyph: modelData.type === "MergeRequest" ? "󰘭" : "󰍩"
+      glyph: modelData.type === (svc.provider === "gitlab" ? "MergeRequest" : "PullRequest") ? root.term.itemGlyph : "󰍩"
       title: modelData.title
       detail: modelData.repository + " · " + modelData.reason + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
@@ -892,7 +987,7 @@ Panel {
       rowKind: "review"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      glyph: "󰘭"
+      glyph: root.term.itemGlyph
       title: modelData.title
       // Drafts only appear here when the setting is on, and the reason to turn
       // it on is knowing which requests are early feedback rather than a real
@@ -903,23 +998,22 @@ Panel {
   }
 
   Component {
-    id: myMergeRequestDelegate
+    id: authoredDelegate
     LinkRow {
       required property var modelData
       required property int index
       readonly property string checks: String(modelData.checks || "NONE")
-      readonly property bool broken: gitlab.isBrokenCheck(checks)
-      readonly property bool running: gitlab.isRunningCheck(checks)
+      readonly property bool broken: svc.isBrokenCheck(checks)
+      readonly property bool running: svc.isRunningCheck(checks)
       width: parent ? parent.width : 0
-      rowKind: "mymr"
+      rowKind: "authored"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      // A merge request with no configured pipeline reports no rollup at all,
-      // which the plain merge request glyph conveys without implying a
-      // pending run.
-      glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : "󰘭"))
+      // No configured pipeline/workflow reports no rollup at all, which the
+      // plain item glyph conveys without implying a pending run.
+      glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : root.term.itemGlyph))
       title: modelData.title
-      detail: modelData.repository + " !" + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
+      detail: modelData.repository + root.term.refPrefix + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       danger: broken
       pulse: running
@@ -943,12 +1037,12 @@ Panel {
   }
 
   Component {
-    id: pipelineDelegate
+    id: runDelegate
     LinkRow {
       required property var modelData
       required property int index
       width: parent ? parent.width : 0
-      rowKind: "pipeline"
+      rowKind: "run"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
       glyph: "󰑮"
@@ -960,17 +1054,17 @@ Panel {
   }
 
   Component {
-    id: failedPipelineDelegate
+    id: failedRunDelegate
     LinkRow {
       required property var modelData
       required property int index
       width: parent ? parent.width : 0
-      rowKind: "failedpipeline"
+      rowKind: "failedrun"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
       glyph: "󰅖"
       title: modelData.name
-      detail: modelData.repository + " · " + modelData.status + " · " + root.relativeTime(modelData.updatedAt)
+      detail: modelData.repository + " · " + modelData.conclusion + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       danger: true
     }
@@ -1135,7 +1229,7 @@ Panel {
       }
       Button {
         visible: sectionFooter.showOpen
-        text: "Open in GitLab  󰅂"
+        text: root.term.openInLabel
         bordered: sectionFooter.expandable || section.footerButtonsBordered
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -1250,37 +1344,37 @@ Panel {
       PanelActionButton {
         id: readAction
         anchors.fill: parent
-        enabled: gitlab.markingNotificationId !== linkRow.notificationId
-        iconText: gitlab.markingNotificationId === linkRow.notificationId ? "󰑐" : "󰄬"
+        enabled: svc.markingNotificationId !== linkRow.notificationId
+        iconText: svc.markingNotificationId === linkRow.notificationId ? "󰑐" : "󰄬"
         tooltipText: "Mark this notification read (M)"
         foreground: root.foreground
         hoverColor: Color.accent
         fontFamily: root.fontFamily
         bordered: false
-        onClicked: gitlab.markNotificationRead(linkRow.notificationId)
+        onClicked: svc.markNotificationRead(linkRow.notificationId)
       }
     }
   }
 
-  component ProjectRow: CursorSurface {
-    id: projectRow
-    property var project: null
+  component RepositoryRow: CursorSurface {
+    id: repoRow
+    property var repo: null
     property int rowIndex: 0
-    readonly property string cursorKey: root.targetKey("project", project, rowIndex)
+    readonly property string cursorKey: root.targetKey("repo", repo, rowIndex)
     hasCursor: root.cursorActive && root.selectedKey() === cursorKey
-    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(projectRow)
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(repoRow)
     foreground: root.foreground
-    implicitHeight: projectLayout.implicitHeight + Style.space(16)
+    implicitHeight: repoLayout.implicitHeight + Style.space(16)
 
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onEntered: root.selectKey(projectRow.cursorKey)
-      onClicked: if (projectRow.project) root.openUrl(projectRow.project.url)
+      onEntered: root.selectKey(repoRow.cursorKey)
+      onClicked: if (repoRow.repo) root.openUrl(repoRow.repo.url)
     }
     RowLayout {
-      id: projectLayout
+      id: repoLayout
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -1292,7 +1386,7 @@ Panel {
         spacing: Style.space(2)
         Text {
           Layout.fillWidth: true
-          text: projectRow.project ? projectRow.project.nameWithOwner : ""
+          text: repoRow.repo ? repoRow.repo.nameWithOwner : ""
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -1301,13 +1395,13 @@ Panel {
         Text {
           Layout.fillWidth: true
           text: {
-            if (!projectRow.project) return ""
-            var parts = ["Issues " + Number(projectRow.project.issues || 0),
-                         "MRs " + Number(projectRow.project.prs || 0),
-                         "Stars " + Number(projectRow.project.stars || 0)]
-            if (Number(projectRow.project.activePipelines || 0) > 0)
-              parts.push("Pipelines " + Number(projectRow.project.activePipelines))
-            parts.push("updated " + root.relativeTime(projectRow.project.updatedAt))
+            if (!repoRow.repo) return ""
+            var parts = ["Issues " + Number(repoRow.repo.issues || 0),
+                         root.term.itemFilterLabel + " " + Number(repoRow.repo.prs || 0),
+                         "Stars " + Number(repoRow.repo.stars || 0)]
+            if (Number(repoRow.repo.activeRuns || 0) > 0)
+              parts.push(root.term.activeMetricLabel + " " + Number(repoRow.repo.activeRuns))
+            parts.push("updated " + root.relativeTime(repoRow.repo.updatedAt))
             return parts.join("  ·  ")
           }
           color: root.dim

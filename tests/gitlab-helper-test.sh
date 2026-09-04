@@ -8,8 +8,8 @@ assert_jq() { jq -e "$1" <<<"$2" >/dev/null || fail "$3"; }
 
 bash -n "$HELPER"
 "$HELPER" --help >/dev/null
-if "$HELPER" --pipeline-scan invalid >/dev/null 2>&1; then fail "invalid pipeline scan mode succeeded"; fi
-if "$HELPER" --project-scope invalid >/dev/null 2>&1; then fail "invalid project scope succeeded"; fi
+if "$HELPER" --scan invalid >/dev/null 2>&1; then fail "invalid scan mode succeeded"; fi
+if "$HELPER" --repository-scope invalid >/dev/null 2>&1; then fail "invalid repository scope succeeded"; fi
 if "$HELPER" --failed-days 0 >/dev/null 2>&1; then fail "invalid failed window succeeded"; fi
 if "$HELPER" --mark-notification-read nope >/dev/null 2>&1; then fail "invalid notification id succeeded"; fi
 
@@ -38,7 +38,7 @@ exit 1
 GLAB
 chmod +x "$sandbox/glab"
 out=$(PATH="$sandbox" "$HELPER")
-assert_jq '.state == "logged-out" and (.projects|length) == 0' "$out" "logged-out state"
+assert_jq '.state == "logged-out" and (.repositories|length) == 0' "$out" "logged-out state"
 
 cat >"$sandbox/glab" <<'GLAB'
 #!/usr/bin/env bash
@@ -119,37 +119,37 @@ exit 1
 GLAB
 chmod +x "$sandbox/glab"
 
-out=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan all --failed-days 7 --failed-limit 5)
-assert_jq '.state == "ready" and .login == "octocat" and .host == "https://example.gitlab.test"' "$out" "ready state"
-assert_jq '.projects|length == 1 and .[0].issues == 3 and .[0].prs == 2 and .[0].stars == 42 and .[0].activePipelines == 1' "$out" "project metrics"
+out=$(PATH="$sandbox:$PATH" "$HELPER" --scan all --failed-days 7 --failed-limit 5)
+assert_jq '.state == "ready" and .login == "octocat" and .provider == "gitlab" and .host == "https://example.gitlab.test"' "$out" "ready state"
+assert_jq '.repositories|length == 1 and .[0].issues == 3 and .[0].prs == 2 and .[0].stars == 42 and .[0].activeRuns == 1' "$out" "repository metrics"
 assert_jq '.notifications|length == 2 and .[0].url == "https://example.gitlab.test/octocat/hello/-/merge_requests/7" and .[1].url == "https://example.gitlab.test/octocat/hello/-/issues/1"' "$out" "todo mapping passes through the ready-made web URL"
 assert_jq '.reviewRequests|length == 1 and .[0].repository == "octocat/hello" and .[0].number == 7' "$out" "review requests parse the project path from references.full"
 assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].repository == "octocat/hello") and (.assignedIssues[0].url|endswith("/issues/8"))' "$out" "assigned issues"
-assert_jq '(.pipelines|length == 1) and (.failedPipelines|length == 1)' "$out" "active and failed pipelines separated"
-assert_jq '.projectScope == "owned"' "$out" "default project scope reported"
+assert_jq '(.runs|length == 1) and (.failedRuns|length == 1)' "$out" "active and failed pipelines separated"
+assert_jq '.repositoryScope == "owned"' "$out" "default repository scope reported"
 assert_jq '(.warnings|length) == 0 and .rateLimit == null' "$out" "no warnings and no rate limit endpoint on self-hosted"
-assert_jq '(.myMergeRequests|length == 2) and (.myMergeRequests[0].id == "octocat/hello!7") and (.myMergeRequests[0].checks == "FAILURE")' "$out" "authored merge requests with head pipeline status"
-assert_jq '(.myMergeRequests[1].checks == "NONE") and (.myMergeRequests[1].draft == true)' "$out" "missing head pipeline falls back to NONE"
-assert_jq '.myMergeRequestsTotal == 2' "$out" "authored merge request total reported"
-grep -q 'projects(personal: true' "$GLAB_TEST_LOG" || fail "default project scope did not query personal projects"
+assert_jq '(.authored|length == 2) and (.authored[0].id == "octocat/hello!7") and (.authored[0].checks == "FAILURE")' "$out" "authored merge requests with head pipeline status"
+assert_jq '(.authored[1].checks == "NONE") and (.authored[1].draft == true)' "$out" "missing head pipeline falls back to NONE"
+assert_jq '.authoredTotal == 2' "$out" "authored merge request total reported"
+grep -q 'projects(personal: true' "$GLAB_TEST_LOG" || fail "default repository scope did not query personal projects"
 
 : >"$GLAB_TEST_LOG"
-out_archived_reviews=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan off --include-archived-reviews true)
+out_archived_reviews=$(PATH="$sandbox:$PATH" "$HELPER" --scan off --include-archived-reviews true)
 assert_jq '(.reviewRequests|length == 1) and (.assignedIssues|length == 1)' "$out_archived_reviews" "searches still return with archived projects included"
 if grep -q 'non_archived=true' "$GLAB_TEST_LOG"; then fail "archived filter applied despite --include-archived-reviews true"; fi
 grep -q 'draft=no' "$GLAB_TEST_LOG" || fail "draft exclusion dropped when archived projects are included"
 
 : >"$GLAB_TEST_LOG"
-out_drafts=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan off --include-draft-reviews true)
+out_drafts=$(PATH="$sandbox:$PATH" "$HELPER" --scan off --include-draft-reviews true)
 assert_jq '.reviewRequests|length == 1' "$out_drafts" "review requests still return with drafts included"
 if grep -q 'draft=no' "$GLAB_TEST_LOG"; then fail "draft filter applied despite --include-draft-reviews true"; fi
 grep -q 'non_archived=true' "$GLAB_TEST_LOG" || fail "archived filter dropped when drafts are included"
 
 : >"$GLAB_TEST_LOG"
-out_membership=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan off --project-scope membership)
-assert_jq '.projectScope == "membership" and (.projects|length) == 2 and ([.projects[].nameWithOwner]|index("acme/work") != null)' "$out_membership" "membership scope includes every membership project"
-grep -q 'projects(membership: true' "$GLAB_TEST_LOG" || fail "membership scope did not reach the query"
-if grep -q 'projects(personal: true' "$GLAB_TEST_LOG"; then fail "personal scope used despite the membership scope"; fi
+out_wider=$(PATH="$sandbox:$PATH" "$HELPER" --scan off --repository-scope wider)
+assert_jq '.repositoryScope == "wider" and (.repositories|length) == 2 and ([.repositories[].nameWithOwner]|index("acme/work") != null)' "$out_wider" "wider scope includes every membership project"
+grep -q 'projects(membership: true' "$GLAB_TEST_LOG" || fail "wider scope did not reach the query"
+if grep -q 'projects(personal: true' "$GLAB_TEST_LOG"; then fail "personal scope used despite the wider scope"; fi
 
 : >"$GLAB_TEST_LOG"
 mark=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123)
@@ -214,7 +214,7 @@ fi
 printf '%s\n' '[]'
 GLAB
 chmod +x "$sandbox/glab"
-scoped=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan all)
+scoped=$(PATH="$sandbox:$PATH" "$HELPER" --scan all)
 assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "pipeline scan warnings keep the API error text"
 
 # --hostname must reach the pipeline scan even though it runs in
@@ -242,8 +242,8 @@ fi
 printf '%s\n' '[]'
 GLAB
 chmod +x "$sandbox/glab"
-out_hostname=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan all --hostname example.gitlab.test)
+out_hostname=$(PATH="$sandbox:$PATH" "$HELPER" --scan all --hostname example.gitlab.test)
 assert_jq '.state == "ready"' "$out_hostname" "a hostname-scoped run still succeeds"
 grep -q '^api --hostname example.gitlab.test --paginate projects/1/pipelines' "$GLAB_TEST_LOG" || fail "--hostname was dropped from the pipeline scan subshell"
 
-echo "helper tests passed"
+echo "gitlab helper tests passed"
