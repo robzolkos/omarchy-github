@@ -19,7 +19,7 @@ assert_contains 'ipcTarget: "pranavbabu.gitlab"' \
 assert_contains 'Service { id: gitlab; settings: root.settings }' \
   "the dashboard service is not wired to the current settings"
 
-assert_contains 'glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))' \
+assert_contains 'glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))' \
   "authored merge requests without checks do not use the merge request glyph"
 assert_contains $'text: linkRow.title\n          textFormat: Text.PlainText' \
   "row titles are not forced to plain text"
@@ -93,7 +93,7 @@ assert_contains $'ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }\n
   "the wheel handler is not a direct child of the panel Flickable"
 
 # GitLab-specific fidelity: terminology, icon, and dashboard deep links.
-assert_contains 'text: ""' \
+assert_contains 'text: ""' \
   "the bar icon is not the GitLab glyph"
 assert_contains 'title: gitlab.login !== "" ? "GitLab · " + gitlab.login : "GitLab"' \
   "the hero title does not read as a GitLab dashboard"
@@ -117,7 +117,7 @@ assert_contains '"No projects loaded."' \
   "the project empty state still claims a scope"
 assert_contains 'detail: modelData.repository + " !" + modelData.number' \
   "the merge request row does not use GitLab's ! reference prefix"
-assert_contains 'glyph: modelData.type === "MergeRequest" ? "" : "󰍩"' \
+assert_contains 'glyph: modelData.type === "MergeRequest" ? "" : "󰍩"' \
   "the notification glyph does not recognise GitLab's MergeRequest target type"
 
 echo "panel source tests passed"
