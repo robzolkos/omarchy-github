@@ -1,197 +1,177 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-HELPER="$ROOT/omarchy-github-fetch"
+HELPER="$ROOT/omarchy-gitlab-fetch"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_jq() { jq -e "$1" <<<"$2" >/dev/null || fail "$3"; }
 
 bash -n "$HELPER"
 "$HELPER" --help >/dev/null
-if "$HELPER" --action-scan invalid >/dev/null 2>&1; then fail "invalid scan mode succeeded"; fi
-if "$HELPER" --repository-scope invalid >/dev/null 2>&1; then fail "invalid repository scope succeeded"; fi
+if "$HELPER" --pipeline-scan invalid >/dev/null 2>&1; then fail "invalid pipeline scan mode succeeded"; fi
+if "$HELPER" --project-scope invalid >/dev/null 2>&1; then fail "invalid project scope succeeded"; fi
 if "$HELPER" --failed-days 0 >/dev/null 2>&1; then fail "invalid failed window succeeded"; fi
 if "$HELPER" --mark-notification-read nope >/dev/null 2>&1; then fail "invalid notification id succeeded"; fi
-if "$HELPER" --mark-all-read-before nope >/dev/null 2>&1; then fail "invalid last-read timestamp succeeded"; fi
-if "$HELPER" --mark-all-read-before 2026-01-03 >/dev/null 2>&1; then fail "date without time succeeded"; fi
-if "$HELPER" --mark-all-read-before 2026-02-30T00:00:00Z --mark-boundary-notification 123 >/dev/null 2>&1; then fail "invalid calendar timestamp succeeded"; fi
-if "$HELPER" --mark-all-read-before 9999-01-01T00:00:00Z --mark-boundary-notification 123 >/dev/null 2>&1; then fail "future timestamp succeeded"; fi
-near_future=$(jq -nr 'now + 60 | todateiso8601')
-if "$HELPER" --mark-all-read-before "$near_future" --mark-boundary-notification 123 >/dev/null 2>&1; then fail "near-future timestamp succeeded"; fi
-if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z >/dev/null 2>&1; then fail "bulk mark without a boundary notification succeeded"; fi
-if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification nope >/dev/null 2>&1; then fail "invalid boundary notification id succeeded"; fi
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT
-export GH_TEST_LOG="$sandbox/gh-calls"
-: >"$GH_TEST_LOG"
+export GLAB_TEST_LOG="$sandbox/glab-calls"
+: >"$GLAB_TEST_LOG"
 ln -s "$(command -v jq)" "$sandbox/jq"
 ln -s "$(command -v bash)" "$sandbox/bash"
+ln -s "$(command -v date)" "$sandbox/date"
+ln -s "$(command -v sort)" "$sandbox/sort"
+ln -s "$(command -v xargs)" "$sandbox/xargs"
+ln -s "$(command -v sed)" "$sandbox/sed"
+ln -s "$(command -v tr)" "$sandbox/tr"
+ln -s "$(command -v cut)" "$sandbox/cut"
+ln -s "$(command -v grep)" "$sandbox/grep"
+ln -s "$(command -v mktemp)" "$sandbox/mktemp"
 out=$(PATH="$sandbox" "$HELPER")
-assert_jq '.state == "gh-not-installed" and (.reviewRequests|length) == 0' "$out" "missing-gh state"
+assert_jq '.state == "glab-not-installed" and (.reviewRequests|length) == 0' "$out" "missing-glab state"
 
-cat >"$sandbox/gh" <<'GH'
+cat >"$sandbox/glab" <<'GLAB'
 #!/usr/bin/env bash
+if [[ $1 == config ]]; then exit 0; fi
 if [[ $1 == auth ]]; then exit 1; fi
 exit 1
-GH
-chmod +x "$sandbox/gh"
+GLAB
+chmod +x "$sandbox/glab"
 out=$(PATH="$sandbox" "$HELPER")
-assert_jq '.state == "logged-out" and (.repositories|length) == 0' "$out" "logged-out state"
+assert_jq '.state == "logged-out" and (.projects|length) == 0' "$out" "logged-out state"
 
-cat >"$sandbox/gh" <<'GH'
+cat >"$sandbox/glab" <<'GLAB'
 #!/usr/bin/env bash
-if [[ $1 == auth ]]; then exit 0; fi
-if [[ $1 == api && $2 == --method && $3 == PATCH ]]; then
-  printf '%s\n' "$*" >>"$GH_TEST_LOG"
-  id=${4##*/}
-  [[ $id == 123 || $id == 124 || $id == 125 ]] || exit 9
-  if [[ ${GH_FAIL_PATCH_ID:-} == "$id" ]]; then echo "boundary patch rejected ghp_abcdefghijklmnopqrstuvwxyz123456" >&2; exit 8; fi
-  printf '%s\n' '{}'; exit 0
+if [[ $1 == config ]]; then
+  case "${4:-}" in
+    host) echo "example.gitlab.test" ;;
+    api_protocol) echo "https" ;;
+  esac
+  exit 0
 fi
-if [[ $1 == api && $2 == --method && $3 == PUT ]]; then
-  printf '%s\n' "$*" >>"$GH_TEST_LOG"
-  [[ $4 == /notifications ]] || exit 9
-  [[ $5 == -f && $6 == last_read_at=2020-01-02T23:59:59Z ]] || { echo "unexpected last_read_at: ${6-}" >&2; exit 9; }
+if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == api && $2 == --method && $3 == POST ]]; then
+  printf '%s\n' "$*" >>"$GLAB_TEST_LOG"
+  id=$(printf '%s' "$4" | grep -oE '^todos/[0-9]+' | cut -d/ -f2)
+  [[ $id == 123 || $id == 124 || $id == 125 ]] || exit 9
+  if [[ ${GLAB_FAIL_MARK_ID:-} == "$id" ]]; then echo "mark rejected glpat-abcdefghijklmnopqrst" >&2; exit 8; fi
   printf '%s\n' '{}'; exit 0
 fi
 if [[ $1 == api && $2 == graphql ]]; then
-  printf '%s\n' "$*" >>"$GH_TEST_LOG"
-  if [[ $* == *author:@me* ]]; then
-    # The second node carries no rollup, which must land as NONE rather than
-    # being conflated with a pending run.
+  printf '%s\n' "$*" >>"$GLAB_TEST_LOG"
+  if [[ $* == *authoredMergeRequests* ]]; then
+    # The second node carries no head pipeline, which must land as NONE
+    # rather than being conflated with a pending run.
     cat <<'JSON'
-{"data":{"search":{"issueCount":2,"nodes":[{"number":7,"title":"Ship it","url":"https://github.com/octocat/hello/pull/7","updatedAt":"2026-01-05T00:00:00Z","isDraft":false,"repository":{"nameWithOwner":"octocat/hello"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"number":9,"title":"No CI here","url":"https://github.com/octocat/quiet/pull/9","updatedAt":"2026-01-04T00:00:00Z","isDraft":true,"repository":{"nameWithOwner":"octocat/quiet"},"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}}
+{"data":{"currentUser":{"username":"octocat","authoredMergeRequests":{"count":2,"nodes":[{"iid":"7","title":"Ship it","webUrl":"https://example.gitlab.test/octocat/hello/-/merge_requests/7","updatedAt":"2026-01-05T00:00:00Z","draft":false,"project":{"fullPath":"octocat/hello"},"headPipeline":{"status":"FAILED"}},{"iid":"9","title":"No CI here","webUrl":"https://example.gitlab.test/octocat/quiet/-/merge_requests/9","updatedAt":"2026-01-04T00:00:00Z","draft":true,"project":{"fullPath":"octocat/quiet"},"headPipeline":null}]}}}}
 JSON
     exit 0
   fi
-  if [[ $* == *'ownerAffiliations:[OWNER,ORGANIZATION_MEMBER]'* ]]; then
+  if [[ $* == *'projects(membership: true'* ]]; then
     cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2}},{"name":"work","nameWithOwner":"acme/work","url":"https://github.com/acme/work","isArchived":false,"isFork":false,"stargazerCount":7,"updatedAt":"2026-01-06T00:00:00Z","issues":{"totalCount":4},"pullRequests":{"totalCount":5}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4998,"resetAt":"2026-01-01T01:00:00Z","cost":2}}}
+{"data":{"projects":{"count":2,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"gid://gitlab/Project/1","fullPath":"octocat/hello","webUrl":"https://example.gitlab.test/octocat/hello","archived":false,"isForked":false,"starCount":42,"forksCount":0,"lastActivityAt":"2026-01-01T00:00:00Z","issues":{"count":3},"mergeRequests":{"count":2}},{"id":"gid://gitlab/Project/2","fullPath":"acme/work","webUrl":"https://example.gitlab.test/acme/work","archived":false,"isForked":false,"starCount":7,"forksCount":0,"lastActivityAt":"2026-01-06T00:00:00Z","issues":{"count":4},"mergeRequests":{"count":5}}]}}}
 JSON
     exit 0
   fi
-  cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4999,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
+  if [[ $* == *'projects(personal: true'* ]]; then
+    cat <<'JSON'
+{"data":{"projects":{"count":2,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"gid://gitlab/Project/1","fullPath":"octocat/hello","webUrl":"https://example.gitlab.test/octocat/hello","archived":false,"isForked":false,"starCount":42,"forksCount":0,"lastActivityAt":"2026-01-01T00:00:00Z","issues":{"count":3},"mergeRequests":{"count":2}},{"id":"gid://gitlab/Project/3","fullPath":"octocat/old","webUrl":"https://example.gitlab.test/octocat/old","archived":true,"isForked":false,"starCount":1,"forksCount":0,"lastActivityAt":"2020-01-01T00:00:00Z","issues":{"count":0},"mergeRequests":{"count":0}}]}}}
 JSON
-  exit 0
+    exit 0
+  fi
+  exit 9
 fi
 endpoint=${*: -1}
-printf '%s\n' "$*" >>"$GH_TEST_LOG"
-if [[ $endpoint == /notifications* ]]; then
+printf '%s\n' "$*" >>"$GLAB_TEST_LOG"
+if [[ $endpoint == todos\?state=pending* ]]; then
   cat <<'JSON'
-[{"id":"123","unread":true,"reason":"mention","updated_at":"2026-01-03T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Review this","type":"PullRequest","url":"https://api.github.com/repos/octocat/hello/pulls/7","latest_comment_url":null}},{"id":"124","unread":true,"reason":"subscribed","updated_at":"2026-01-02T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Unknown subject","type":"RepositoryVulnerabilityAlert","url":"https://api.github.com/repos/octocat/hello/private-vulnerability-reporting/1","latest_comment_url":"https://api.github.com/repos/octocat/hello/comments/1"}}]
+[{"id":123,"action_name":"mentioned","updated_at":"2026-01-03T00:00:00Z","project":{"path_with_namespace":"octocat/hello"},"target_type":"MergeRequest","target":{"title":"Review this"},"target_url":"https://example.gitlab.test/octocat/hello/-/merge_requests/7"},{"id":124,"action_name":"assigned","updated_at":"2026-01-02T00:00:00Z","project":{"path_with_namespace":"octocat/hello"},"target_type":"Issue","target":{"title":"Unknown subject"},"target_url":"https://example.gitlab.test/octocat/hello/-/issues/1"}]
 JSON
   exit 0
 fi
-if [[ $endpoint == /search/issues\?q=is%3Aopen+is%3Apr* ]]; then
+if [[ $endpoint == merge_requests\?scope=all* ]]; then
   cat <<'JSON'
-{"items":[{"id":71,"number":7,"title":"Please review","repository_url":"https://api.github.com/repos/octocat/hello","html_url":"https://github.com/octocat/hello/pull/7","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
+[{"id":71,"iid":7,"title":"Please review","references":{"full":"octocat/hello!7"},"web_url":"https://example.gitlab.test/octocat/hello/-/merge_requests/7","updated_at":"2026-01-02T00:00:00Z","author":{"username":"friend"},"draft":false}]
 JSON
   exit 0
 fi
-if [[ $endpoint == /search/issues\?q=is%3Aopen+is%3Aissue* ]]; then
+if [[ $endpoint == issues\?scope=all* ]]; then
   cat <<'JSON'
-{"items":[{"id":81,"number":8,"title":"Fix it","repository_url":"https://api.github.com/repos/octocat/hello","html_url":"https://github.com/octocat/hello/issues/8","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
+[{"id":81,"iid":8,"title":"Fix it","references":{"full":"octocat/hello#8"},"web_url":"https://example.gitlab.test/octocat/hello/-/issues/8","updated_at":"2026-01-02T00:00:00Z","author":{"username":"friend"}}]
 JSON
   exit 0
 fi
-if [[ $endpoint == /repos/octocat/hello/actions/runs* ]]; then
+if [[ $endpoint == projects/1/pipelines\?status=running* ]]; then
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  if [[ $endpoint == *status=queued* ]]; then
-    # Simulate a paginated response where the active run is beyond the first
-    # 100 records. A non-paginated or unfiltered implementation misses id 10.
-    jq -n --arg now "$now" '{workflow_runs:[range(100)|{id:(1000+.),name:"Old",status:"completed",conclusion:"success",created_at:$now,updated_at:$now}]}'
-    cat <<JSON
-{"workflow_runs":[{"id":10,"name":"CI","display_title":"Build","status":"queued","conclusion":null,"head_branch":"main","html_url":"https://github.com/octocat/hello/actions/runs/10","created_at":"$now","updated_at":"$now"}]}
-JSON
-  elif [[ $endpoint == *status=completed* ]]; then
-    jq -n --arg now "$now" '{workflow_runs:[range(100)|{id:(2000+.),name:"Passed",status:"completed",conclusion:"success",created_at:$now,updated_at:$now}]}'
-    cat <<JSON
-{"workflow_runs":[{"id":11,"name":"Test","status":"completed","conclusion":"failure","head_branch":"main","html_url":"https://github.com/octocat/hello/actions/runs/11","created_at":"$now","updated_at":"$now"}]}
-JSON
-  else
-    printf '%s\n' '{"workflow_runs":[]}'
-  fi
+  printf '%s\n' "[{\"id\":10,\"status\":\"running\",\"source\":\"push\",\"ref\":\"main\",\"web_url\":\"https://example.gitlab.test/octocat/hello/-/pipelines/10\",\"created_at\":\"$now\",\"updated_at\":\"$now\"}]"
+  exit 0
+fi
+if [[ $endpoint == projects/1/pipelines\?status=failed* ]]; then
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '%s\n' "[{\"id\":11,\"status\":\"failed\",\"source\":\"push\",\"ref\":\"main\",\"web_url\":\"https://example.gitlab.test/octocat/hello/-/pipelines/11\",\"created_at\":\"$now\",\"updated_at\":\"$now\"}]"
+  exit 0
+fi
+if [[ $endpoint == projects/*/pipelines* ]]; then
+  printf '%s\n' '[]'
   exit 0
 fi
 exit 1
-GH
-chmod +x "$sandbox/gh"
-out=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all --failed-days 7 --failed-limit 5)
-assert_jq '.state == "ready" and .login == "octocat"' "$out" "ready state"
-assert_jq '.repositories|length == 1 and .[0].issues == 3 and .[0].prs == 2 and .[0].stars == 42 and .[0].activeActions == 1' "$out" "repository metrics"
-assert_jq '.notifications|length == 2 and .[0].url == "https://github.com/octocat/hello/pull/7" and .[1].url == "https://github.com/octocat/hello"' "$out" "type-aware notification conversion and fallback"
-assert_jq '.reviewRequests|length == 1 and .[0].repository == "octocat/hello"' "$out" "review requests"
-assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/issues/8"))' "$out" "assigned issues"
-assert_jq '(.actions|length == 1) and (.failedActions|length == 1)' "$out" "active and failed actions separated"
-assert_jq '.repositoryScope == "owned"' "$out" "default repository scope reported"
-assert_jq '.rateLimit.remaining == 4999 and (.warnings|length) == 0' "$out" "rate limit and warnings"
-assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
-assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
-assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
-grep -q 'author:@me.*sort:updated-desc' "$GH_TEST_LOG" || fail "authored pull request search was not server sorted"
-grep -q 'author:@me.*archived:false' "$GH_TEST_LOG" || fail "authored pull request search was not archive filtered"
-grep -q -- '--paginate.*status=queued' "$GH_TEST_LOG" || fail "queued Actions request was not paginated"
-grep -q 'status=completed.*created=%3E%3D' "$GH_TEST_LOG" || fail "completed Actions request was not date bounded"
-grep -q 'review-requested%3A%40me+draft%3Afalse+archived%3Afalse' "$GH_TEST_LOG" || fail "review request search was not draft and archive filtered"
-grep -q 'assignee%3A%40me+archived%3Afalse' "$GH_TEST_LOG" || fail "assigned issue search was not archive filtered"
-: >"$GH_TEST_LOG"
-out_archived_reviews=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --include-archived-reviews true)
-assert_jq '(.reviewRequests|length == 1) and (.assignedIssues|length == 1)' "$out_archived_reviews" "searches still return with archived included"
-if grep -q 'archived%3Afalse' "$GH_TEST_LOG"; then fail "archived filter applied despite --include-archived-reviews true"; fi
-# The draft exclusion has its own setting, so it must survive the archived one.
-grep -q 'draft%3Afalse' "$GH_TEST_LOG" || fail "draft exclusion dropped when archived repositories are included"
-: >"$GH_TEST_LOG"
-out_drafts=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --include-draft-reviews true)
-assert_jq '.reviewRequests|length == 1' "$out_drafts" "review requests still return with drafts included"
-if grep -q 'draft%3Afalse' "$GH_TEST_LOG"; then fail "draft filter applied despite --include-draft-reviews true"; fi
-grep -q 'archived%3Afalse' "$GH_TEST_LOG" || fail "archived filter dropped when drafts are included"
-# The repository-list archive setting independently controls authored PRs.
-: >"$GH_TEST_LOG"
-out_archived=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --include-archived true)
-assert_jq '.myPullRequests|length == 2' "$out_archived" "authored pull requests survive the archived setting"
-grep -q 'author:@me' "$GH_TEST_LOG" || fail "authored pull request search did not run"
-if grep -q 'archived:false' "$GH_TEST_LOG"; then fail "archived filter applied despite --include-archived true"; fi
-# Each scope run truncates the log first, so the greps below read only the run
-# they belong to rather than an earlier one that used the other affiliation.
-: >"$GH_TEST_LOG"
-out_owned=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
-assert_jq '.repositoryScope == "owned" and (.repositories|length) == 1 and ([.repositories[].nameWithOwner]|index("acme/work")|not)' "$out_owned" "owned scope excludes organization repositories"
-grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG" || fail "default scope did not query owned repositories"
-: >"$GH_TEST_LOG"
-out_scoped=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --repository-scope organizations)
-assert_jq '.repositoryScope == "organizations" and (.repositories|length) == 2 and ([.repositories[].nameWithOwner]|index("acme/work") != null)' "$out_scoped" "organization scope includes organization repositories"
-grep -q 'ownerAffiliations:\[OWNER,ORGANIZATION_MEMBER\],' "$GH_TEST_LOG" || fail "organization scope did not reach the query"
-if grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG"; then fail "owned affiliation used despite the organization scope"; fi
+GLAB
+chmod +x "$sandbox/glab"
 
-: >"$GH_TEST_LOG"
+out=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan all --failed-days 7 --failed-limit 5)
+assert_jq '.state == "ready" and .login == "octocat" and .host == "https://example.gitlab.test"' "$out" "ready state"
+assert_jq '.projects|length == 1 and .[0].issues == 3 and .[0].prs == 2 and .[0].stars == 42 and .[0].activePipelines == 1' "$out" "project metrics"
+assert_jq '.notifications|length == 2 and .[0].url == "https://example.gitlab.test/octocat/hello/-/merge_requests/7" and .[1].url == "https://example.gitlab.test/octocat/hello/-/issues/1"' "$out" "todo mapping passes through the ready-made web URL"
+assert_jq '.reviewRequests|length == 1 and .[0].repository == "octocat/hello" and .[0].number == 7' "$out" "review requests parse the project path from references.full"
+assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].repository == "octocat/hello") and (.assignedIssues[0].url|endswith("/issues/8"))' "$out" "assigned issues"
+assert_jq '(.pipelines|length == 1) and (.failedPipelines|length == 1)' "$out" "active and failed pipelines separated"
+assert_jq '.projectScope == "owned"' "$out" "default project scope reported"
+assert_jq '(.warnings|length) == 0 and .rateLimit == null' "$out" "no warnings and no rate limit endpoint on self-hosted"
+assert_jq '(.myMergeRequests|length == 2) and (.myMergeRequests[0].id == "octocat/hello!7") and (.myMergeRequests[0].checks == "FAILURE")' "$out" "authored merge requests with head pipeline status"
+assert_jq '(.myMergeRequests[1].checks == "NONE") and (.myMergeRequests[1].draft == true)' "$out" "missing head pipeline falls back to NONE"
+assert_jq '.myMergeRequestsTotal == 2' "$out" "authored merge request total reported"
+grep -q 'projects(personal: true' "$GLAB_TEST_LOG" || fail "default project scope did not query personal projects"
+
+: >"$GLAB_TEST_LOG"
+out_archived_reviews=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan off --include-archived-reviews true)
+assert_jq '(.reviewRequests|length == 1) and (.assignedIssues|length == 1)' "$out_archived_reviews" "searches still return with archived projects included"
+if grep -q 'non_archived=true' "$GLAB_TEST_LOG"; then fail "archived filter applied despite --include-archived-reviews true"; fi
+grep -q 'draft=no' "$GLAB_TEST_LOG" || fail "draft exclusion dropped when archived projects are included"
+
+: >"$GLAB_TEST_LOG"
+out_drafts=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan off --include-draft-reviews true)
+assert_jq '.reviewRequests|length == 1' "$out_drafts" "review requests still return with drafts included"
+if grep -q 'draft=no' "$GLAB_TEST_LOG"; then fail "draft filter applied despite --include-draft-reviews true"; fi
+grep -q 'non_archived=true' "$GLAB_TEST_LOG" || fail "archived filter dropped when drafts are included"
+
+: >"$GLAB_TEST_LOG"
+out_membership=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan off --project-scope membership)
+assert_jq '.projectScope == "membership" and (.projects|length) == 2 and ([.projects[].nameWithOwner]|index("acme/work") != null)' "$out_membership" "membership scope includes every membership project"
+grep -q 'projects(membership: true' "$GLAB_TEST_LOG" || fail "membership scope did not reach the query"
+if grep -q 'projects(personal: true' "$GLAB_TEST_LOG"; then fail "personal scope used despite the membership scope"; fi
+
+: >"$GLAB_TEST_LOG"
 mark=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123)
-assert_jq '.state == "ready" and .notificationId == "123"' "$mark" "mark notification read"
-: >"$GH_TEST_LOG"
-mark_all=$(PATH="$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification 123 --mark-boundary-notification 124)
-assert_jq '.state == "ready" and .lastReadAt == "2020-01-03T00:00:00Z"' "$mark_all" "mark all notifications read"
-mapfile -t mark_calls <"$GH_TEST_LOG"
-[[ ${#mark_calls[@]} -eq 3 ]] || fail "bulk mark made an unexpected number of API calls"
-[[ ${mark_calls[0]} == 'api --method PUT /notifications -f last_read_at=2020-01-02T23:59:59Z' ]] || fail "bulk mark did not stop before the boundary second"
-[[ ${mark_calls[1]} == 'api --method PATCH /notifications/threads/123' && ${mark_calls[2]} == 'api --method PATCH /notifications/threads/124' ]] || fail "bulk mark did not patch exactly the confirmed boundary notifications"
-: >"$GH_TEST_LOG"
+assert_jq '.state == "ready"' "$mark" "mark a single notification read"
+mapfile -t mark_calls <"$GLAB_TEST_LOG"
+[[ ${#mark_calls[@]} -eq 1 && ${mark_calls[0]} == 'api --method POST todos/123/mark_as_done' ]] || fail "single mark issued an unexpected call"
+
+: >"$GLAB_TEST_LOG"
+mark_all=$(PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123 --mark-notification-read 124)
+assert_jq '.state == "ready"' "$mark_all" "mark several notifications read in one run"
+mapfile -t mark_all_calls <"$GLAB_TEST_LOG"
+[[ ${#mark_all_calls[@]} -eq 2 ]] || fail "bulk mark made an unexpected number of API calls"
+
+: >"$GLAB_TEST_LOG"
 set +e
-mark_partial=$(GH_FAIL_PATCH_ID=124 PATH="$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification 123 --mark-boundary-notification 124 --mark-boundary-notification 125)
+mark_partial=$(GLAB_FAIL_MARK_ID=124 PATH="$sandbox:$PATH" "$HELPER" --mark-notification-read 123 --mark-notification-read 124 --mark-notification-read 125)
 mark_partial_status=$?
 set -e
-[[ $mark_partial_status -eq 1 ]] || fail "partial boundary failure returned status $mark_partial_status"
-assert_jq '.state == "error" and .notificationId == "124" and (.message|test("boundary patch rejected")) and (.message|contains("ghp_")|not) and (.message|contains("[REDACTED]"))' "$mark_partial" "partial boundary failure reports the failing notification without exposing credentials"
-mapfile -t partial_calls <"$GH_TEST_LOG"
-[[ ${#partial_calls[@]} -eq 3 && ${partial_calls[0]} == 'api --method PUT /notifications -f last_read_at=2020-01-02T23:59:59Z' && ${partial_calls[1]} == 'api --method PATCH /notifications/threads/123' && ${partial_calls[2]} == 'api --method PATCH /notifications/threads/124' ]] || fail "partial boundary failure did not stop at the failing notification"
-# A rejected request must surface as an error payload rather than an empty
-# response, which is what a missing notifications scope looks like in practice.
-set +e
-mark_all_failed=$(PATH="$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-01T00:00:00Z --mark-boundary-notification 123)
-mark_all_failed_status=$?
-set -e
-[[ $mark_all_failed_status -eq 1 ]] || fail "failed bulk mark returned status $mark_all_failed_status"
-assert_jq '.state == "error" and .lastReadAt == "2020-01-01T00:00:00Z"' "$mark_all_failed" "failed mark all reports an error"
+[[ $mark_partial_status -eq 1 ]] || fail "partial mark failure returned status $mark_partial_status"
+assert_jq '.state == "error" and .notificationId == "124" and (.message|test("mark rejected")) and (.message|contains("glpat-")|not) and (.message|contains("[REDACTED]"))' "$mark_partial" "partial mark failure reports the failing id without exposing the token"
+mapfile -t partial_calls <"$GLAB_TEST_LOG"
+[[ ${#partial_calls[@]} -eq 2 ]] || fail "partial mark failure did not stop at the failing notification"
 
 mkdir "$sandbox/failbin"
 cat >"$sandbox/failbin/mktemp" <<'SH'
@@ -202,37 +182,39 @@ chmod +x "$sandbox/failbin/mktemp"
 set +e
 mark_setup_failed=$(PATH="$sandbox/failbin:$sandbox:$PATH" "$HELPER" --mark-notification-read 123)
 mark_setup_status=$?
-bulk_setup_failed=$(PATH="$sandbox/failbin:$sandbox:$PATH" "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notification 123)
-bulk_setup_status=$?
 fetch_setup_failed=$(PATH="$sandbox/failbin:$sandbox:$PATH" "$HELPER")
 fetch_setup_status=$?
 set -e
-[[ $mark_setup_status -eq 1 && $bulk_setup_status -eq 1 && $fetch_setup_status -eq 1 ]] || fail "temporary-storage failures returned an unexpected status"
-assert_jq '.state == "error" and .notificationId == "123"' "$mark_setup_failed" "single mark setup failure reports an error"
-assert_jq '.state == "error" and .lastReadAt == "2020-01-03T00:00:00Z"' "$bulk_setup_failed" "bulk mark setup failure reports an error"
+[[ $mark_setup_status -eq 1 && $fetch_setup_status -eq 1 ]] || fail "temporary-storage failures returned an unexpected status"
+assert_jq '.state == "error"' "$mark_setup_failed" "single mark setup failure reports an error"
 assert_jq '.state == "error"' "$fetch_setup_failed" "refresh setup failure reports an error"
 
-# The Actions scan runs in xargs subshells, which only see exported functions.
-# An unexported helper there degrades every warning to the generic fallback
-# instead of the API's own explanation.
-cat >"$sandbox/gh" <<'GH'
+# The pipeline scan runs in xargs subshells, which only see exported
+# functions. An unexported helper there degrades every warning to the generic
+# fallback instead of the API's own explanation.
+cat >"$sandbox/glab" <<'GLAB'
 #!/usr/bin/env bash
+if [[ $1 == config ]]; then exit 0; fi
 if [[ $1 == auth ]]; then exit 0; fi
 if [[ $1 == api && $2 == graphql ]]; then
+  if [[ $* == *authoredMergeRequests* ]]; then
+    printf '%s\n' '{"data":{"currentUser":{"username":"octocat","authoredMergeRequests":{"count":0,"nodes":[]}}}}'
+    exit 0
+  fi
   cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":10,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
+{"data":{"projects":{"count":1,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"gid://gitlab/Project/1","fullPath":"octocat/hello","webUrl":"https://example.gitlab.test/octocat/hello","archived":false,"isForked":false,"starCount":1,"forksCount":0,"lastActivityAt":"2026-01-01T00:00:00Z","issues":{"count":0},"mergeRequests":{"count":0}}]}}}
 JSON
   exit 0
 fi
 endpoint=${*: -1}
-if [[ $endpoint == /repos/octocat/hello/actions/runs* ]]; then
-  echo "HTTP 403: Resource not accessible by integration" >&2
+if [[ $endpoint == projects/1/pipelines* ]]; then
+  echo "HTTP 403: insufficient_scope" >&2
   exit 1
 fi
 printf '%s\n' '[]'
-GH
-chmod +x "$sandbox/gh"
-scoped=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all)
-assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "Actions warnings keep the API error text"
+GLAB
+chmod +x "$sandbox/glab"
+scoped=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan all)
+assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "pipeline scan warnings keep the API error text"
 
 echo "helper tests passed"

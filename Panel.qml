@@ -8,8 +8,8 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "robzolkos.github"
-  ipcTarget: "robzolkos.github"
+  moduleName: "pranavbabu.gitlab"
+  ipcTarget: "pranavbabu.gitlab"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -23,9 +23,9 @@ Panel {
   property int cursorIndex: 0
   property int notificationsPage: 0
   property bool reviewsExpanded: false
-  property bool myPullsExpanded: false
+  property bool myMergeRequestsExpanded: false
   property bool issuesExpanded: false
-  property bool actionsExpanded: false
+  property bool pipelinesExpanded: false
   property bool failuresExpanded: false
   // settingsOpen is the page on screen; pendingSettingsOpen is the page the
   // in-flight flip will land on, since the swap happens edge-on at 90 degrees.
@@ -35,9 +35,9 @@ Panel {
     { value: "Web app window", label: "Web app window" },
     { value: "Browser tab", label: "Browser tab" }
   ]
-  readonly property var repositoryScopeOptions: [
-    { value: "Owned", label: "Owned repositories" },
-    { value: "Owned and organizations", label: "Owned and organizations" }
+  readonly property var projectScopeOptions: [
+    { value: "Owned", label: "Owned projects" },
+    { value: "Member of", label: "Member of" }
   ]
   readonly property var refreshIntervalOptions: [
     { value: "300", label: "Every 5 minutes" },
@@ -54,15 +54,15 @@ Panel {
   readonly property int activityExpandedCount: 25
   readonly property var metricFilters: [
     { id: "all", label: "All" }, { id: "issues", label: "Issues" },
-    { id: "prs", label: "PRs" }, { id: "stars", label: "Stars" },
-    { id: "actions", label: "Actions" }
+    { id: "prs", label: "MRs" }, { id: "stars", label: "Stars" },
+    { id: "pipelines", label: "Pipelines" }
   ]
   readonly property var sortModes: [
     { value: "updated", label: "Updated" }, { value: "name", label: "Name" },
     { value: "stars", label: "Stars" }, { value: "issues", label: "Issues" },
-    { value: "prs", label: "PRs" }, { value: "actions", label: "Actions" }
+    { value: "prs", label: "MRs" }, { value: "pipelines", label: "Pipelines" }
   ]
-  readonly property var displayedRepositories: filteredRepositories()
+  readonly property var displayedProjects: filteredProjects()
   readonly property var cursorTargets: buildCursorTargets()
   readonly property var selectedTarget: cursorTargets.length > 0 ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))] : null
 
@@ -71,14 +71,14 @@ Panel {
   }
 
   function notificationPageCount() {
-    return Math.max(1, Math.ceil(github.notifications.length / activityPreviewCount))
+    return Math.max(1, Math.ceil(gitlab.notifications.length / activityPreviewCount))
   }
 
   function notificationRows() {
     var page = Math.max(0, Math.min(notificationsPage, notificationPageCount() - 1))
     if (page !== notificationsPage) notificationsPage = page
     var start = page * activityPreviewCount
-    return github.notifications.slice(start, start + activityPreviewCount)
+    return gitlab.notifications.slice(start, start + activityPreviewCount)
   }
 
   function buildCursorTargets() {
@@ -87,12 +87,12 @@ Panel {
       for (var i = 0; i < rows.length; i++) targets.push({ key: kind + ":" + String(rows[i].id || rows[i].url || i), kind: kind, row: rows[i] })
     }
     add("notification", notificationRows())
-    add("review", sectionRows(github.reviewRequests, reviewsExpanded))
-    add("mypull", sectionRows(github.myPullRequests, myPullsExpanded))
-    add("issue", sectionRows(github.assignedIssues, issuesExpanded))
-    add("action", sectionRows(github.actions, actionsExpanded))
-    add("failure", sectionRows(github.failedActions, failuresExpanded))
-    add("repository", displayedRepositories)
+    add("review", sectionRows(gitlab.reviewRequests, reviewsExpanded))
+    add("mymr", sectionRows(gitlab.myMergeRequests, myMergeRequestsExpanded))
+    add("issue", sectionRows(gitlab.assignedIssues, issuesExpanded))
+    add("pipeline", sectionRows(gitlab.pipelines, pipelinesExpanded))
+    add("failedpipeline", sectionRows(gitlab.failedPipelines, failuresExpanded))
+    add("project", displayedProjects)
     return targets
   }
 
@@ -120,10 +120,10 @@ Panel {
     var target = String(url || "")
     var notificationId = String(id || "")
     openUrl(target)
-    if (kind === "notification") github.markNotificationRead(notificationId)
+    if (kind === "notification") gitlab.markNotificationRead(notificationId)
   }
   function markSelectedRead() {
-    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))
+    if (selectedTarget && selectedTarget.kind === "notification") gitlab.markNotificationRead(String(selectedTarget.row.id || ""))
   }
   function applyPanelWheel(event) {
     if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false
@@ -169,17 +169,17 @@ Panel {
   function checkLabel(checks) {
     if (checks === "SUCCESS") return "checks passing"
     if (checks === "ERROR") return "checks errored"
-    if (github.isBrokenCheck(checks)) return "checks failing"
-    if (github.isRunningCheck(checks)) return "checks running"
+    if (gitlab.isBrokenCheck(checks)) return "checks failing"
+    if (gitlab.isRunningCheck(checks)) return "checks running"
     return "no checks"
   }
 
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
-    // omarchy-launch-webapp gives GitHub its own window; omarchy-launch-browser
+    // omarchy-launch-webapp gives GitLab its own window; omarchy-launch-browser
     // hands the URL to the default browser for those without a Chromium-based one.
-    if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])
+    if (gitlab.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])
     else Quickshell.execDetached(["omarchy-launch-webapp", value])
     close()
   }
@@ -206,33 +206,33 @@ Panel {
     pendingSettingsOpen = next
     // A popup left open would float over the card while it flips.
     linkBehaviorDropdown.close()
-    repositoryScopeDropdown.close()
+    projectScopeDropdown.close()
     refreshIntervalDropdown.close()
     if (sortPicker) sortPicker.close()
     pageFlip.restart()
   }
 
-  function filteredRepositories() {
+  function filteredProjects() {
     var needle = String(query || "").trim().toLowerCase()
     var rows = []
-    for (var i = 0; i < github.repositories.length; i++) {
-      var repo = github.repositories[i]
-      if (needle !== "" && String(repo.nameWithOwner || repo.name || "").toLowerCase().indexOf(needle) === -1) continue
-      if (metricFilter === "issues" && Number(repo.issues || 0) <= 0) continue
-      if (metricFilter === "prs" && Number(repo.prs || 0) <= 0) continue
-      if (metricFilter === "stars" && Number(repo.stars || 0) <= 0) continue
-      if (metricFilter === "actions" && Number(repo.activeActions || 0) <= 0) continue
-      rows.push(repo)
+    for (var i = 0; i < gitlab.projects.length; i++) {
+      var project = gitlab.projects[i]
+      if (needle !== "" && String(project.nameWithOwner || project.name || "").toLowerCase().indexOf(needle) === -1) continue
+      if (metricFilter === "issues" && Number(project.issues || 0) <= 0) continue
+      if (metricFilter === "prs" && Number(project.prs || 0) <= 0) continue
+      if (metricFilter === "stars" && Number(project.stars || 0) <= 0) continue
+      if (metricFilter === "pipelines" && Number(project.activePipelines || 0) <= 0) continue
+      rows.push(project)
     }
     rows.sort(function(a, b) {
       if (sortMode === "name") return String(a.nameWithOwner).localeCompare(String(b.nameWithOwner))
       if (sortMode === "updated") return String(b.updatedAt).localeCompare(String(a.updatedAt))
-      var av = Number(a[sortMode] || (sortMode === "actions" ? a.activeActions : 0) || 0)
-      var bv = Number(b[sortMode] || (sortMode === "actions" ? b.activeActions : 0) || 0)
+      var av = Number(a[sortMode] || (sortMode === "pipelines" ? a.activePipelines : 0) || 0)
+      var bv = Number(b[sortMode] || (sortMode === "pipelines" ? b.activePipelines : 0) || 0)
       if (av !== bv) return bv - av
       return String(a.nameWithOwner).localeCompare(String(b.nameWithOwner))
     })
-    return rows.slice(0, Math.max(10, Number(setting("maxDisplayedRepos", 25))))
+    return rows.slice(0, Math.max(10, Number(setting("maxDisplayedProjects", 25))))
   }
 
   function relativeTime(value) {
@@ -264,13 +264,13 @@ Panel {
       cursorActive = false
       cursorIndex = 0
       if (panelFlick) panelFlick.contentY = 0
-      github.refresh()
+      gitlab.refresh()
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     }
   }
   onCursorTargetsChanged: ensureCursor()
 
-  Service { id: github; settings: root.settings }
+  Service { id: gitlab; settings: root.settings }
 
   IpcHandler {
     target: root.ipcTarget
@@ -279,18 +279,18 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function refresh(): string { github.refresh(); return "ok" }
-    function status(): string { return github.state }
+    function refresh(): string { gitlab.refresh(); return "ok" }
+    function status(): string { return gitlab.state }
   }
 
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: ""
-    active: github.alarming
+    text: ""
+    active: gitlab.alarming
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) github.refresh()
+      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) gitlab.refresh()
       else root.toggle()
     }
   }
@@ -325,7 +325,7 @@ Panel {
       }
       onTextKey: function(text) {
         if (root.settingsOpen) return
-        if (text === "r" || text === "R") github.refresh()
+        if (text === "r" || text === "R") gitlab.refresh()
         else if (text === "/") Qt.callLater(function() { search.forceActiveFocus() })
         else if (text === "m" || text === "M") root.markSelectedRead()
       }
@@ -391,12 +391,12 @@ Panel {
 
           PanelHero {
             width: parent.width
-            title: github.login !== "" ? "GitHub · " + github.login : "GitHub"
+            title: gitlab.login !== "" ? "GitLab · " + gitlab.login : "GitLab"
             // Mirrors every term of the alarming state, so the summary always
             // explains why the bar icon is lit.
-            meta: github.loading ? "Refreshing dashboard…" : (github.state === "ready" ?
-              github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"
-                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message)
+            meta: gitlab.loading ? "Refreshing dashboard…" : (gitlab.state === "ready" ?
+              gitlab.unreadCount + " unread · " + gitlab.reviewRequests.length + " reviews · " + gitlab.pipelineCount + " active pipelines"
+                + (gitlab.failingMergeRequestCount > 0 ? " · " + gitlab.failingMergeRequestCount + " failing" : "") : gitlab.message)
             foreground: root.foreground
             fontFamily: root.fontFamily
             // The hero reserves the trailing space and centres the control
@@ -404,7 +404,7 @@ Panel {
             trailingControl: Component {
               PanelActionButton {
                 iconText: "󰒓"
-                tooltipText: "GitHub settings"
+                tooltipText: "GitLab settings"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: root.showSettings(true)
@@ -412,7 +412,7 @@ Panel {
             }
             iconComponent: Component {
               Text {
-                text: ""
+                text: ""
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
@@ -423,9 +423,9 @@ Panel {
           }
 
           Text {
-            visible: github.notificationActionStatus !== ""
+            visible: gitlab.notificationActionStatus !== ""
             width: parent.width
-            text: github.notificationActionStatus
+            text: gitlab.notificationActionStatus
             textFormat: Text.PlainText
             color: root.dim
             font.family: root.fontFamily
@@ -435,7 +435,7 @@ Panel {
           }
 
           BorderSurface {
-            visible: github.state !== "ready" || github.warnings.length > 0
+            visible: gitlab.state !== "ready" || gitlab.warnings.length > 0
             width: parent.width
             implicitHeight: statusText.implicitHeight + Style.space(20)
             color: Qt.rgba(root.urgent.r, root.urgent.g, root.urgent.b, 0.10)
@@ -449,13 +449,13 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               anchors.margins: Style.space(10)
               text: {
-                if (github.state !== "ready") return github.message
-                var summary = "Partial results · " + String(github.warnings[0] || "A GitHub request failed.")
-                if (github.warnings.length > 1) summary += " · " + (github.warnings.length - 1) + " more"
+                if (gitlab.state !== "ready") return gitlab.message
+                var summary = "Partial results · " + String(gitlab.warnings[0] || "A GitLab request failed.")
+                if (gitlab.warnings.length > 1) summary += " · " + (gitlab.warnings.length - 1) + " more"
                 return summary
               }
               textFormat: Text.PlainText
-              color: github.state === "ready" ? root.dim : root.urgent
+              color: gitlab.state === "ready" ? root.dim : root.urgent
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
@@ -465,81 +465,81 @@ Panel {
           DashboardSection {
             id: notificationsSection
             title: "UNREAD NOTIFICATIONS"
-            count: github.notifications.length
-            emptyText: github.state === "ready" ? "You're all caught up." : "No notifications loaded."
+            count: gitlab.notifications.length
+            emptyText: gitlab.state === "ready" ? "You're all caught up." : "No notifications loaded."
             model: root.notificationRows()
             showExpansionControl: false
             footerButtonsBordered: true
             page: root.notificationsPage
             pageCount: root.notificationPageCount()
-            openUrl: "https://github.com/notifications"
+            openUrl: gitlab.host + "/dashboard/todos"
             onPreviousPage: root.notificationsPage = Math.max(0, root.notificationsPage - 1)
             onNextPage: root.notificationsPage = Math.min(root.notificationPageCount() - 1, root.notificationsPage + 1)
             delegateComponent: notificationDelegate
             actionText: "Mark all read"
             actionBusyText: "Marking…"
-            actionEnabled: github.state === "ready" && !github.loading
-            actionBusy: github.marking
-            actionRevision: github.notificationsRevision
-            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }
-            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }
+            actionEnabled: gitlab.state === "ready" && !gitlab.loading
+            actionBusy: gitlab.marking
+            actionRevision: gitlab.notificationsRevision
+            actionPrepare: function() { return gitlab.prepareMarkAllNotificationsRead() }
+            onActionTriggered: function(prepared) { gitlab.markAllNotificationsRead(prepared) }
           }
 
           DashboardSection {
             visible: count > 0
             title: "REVIEW REQUESTS"
-            count: github.reviewRequests.length
-            model: root.sectionRows(github.reviewRequests, root.reviewsExpanded)
+            count: gitlab.reviewRequests.length
+            model: root.sectionRows(gitlab.reviewRequests, root.reviewsExpanded)
             expanded: root.reviewsExpanded
-            openUrl: "https://github.com/pulls/review-requested"
+            openUrl: gitlab.host + "/dashboard/merge_requests?reviewer_username=" + gitlab.login
             onToggleExpanded: root.reviewsExpanded = !root.reviewsExpanded
             delegateComponent: reviewDelegate
           }
 
           DashboardSection {
             visible: count > 0
-            title: "MY PULL REQUESTS"
-            // The search is capped at one page, so the fetched list can be
+            title: "MY MERGE REQUESTS"
+            // The query is capped at one page, so the fetched list can be
             // shorter than the real total. Show the total rather than implying
             // the section is complete.
-            count: Math.max(github.myPullRequestsTotal, github.myPullRequests.length)
-            model: root.sectionRows(github.myPullRequests, root.myPullsExpanded)
-            expanded: root.myPullsExpanded
-            openUrl: "https://github.com/pulls"
-            onToggleExpanded: root.myPullsExpanded = !root.myPullsExpanded
-            delegateComponent: myPullRequestDelegate
+            count: Math.max(gitlab.myMergeRequestsTotal, gitlab.myMergeRequests.length)
+            model: root.sectionRows(gitlab.myMergeRequests, root.myMergeRequestsExpanded)
+            expanded: root.myMergeRequestsExpanded
+            openUrl: gitlab.host + "/dashboard/merge_requests?author_username=" + gitlab.login
+            onToggleExpanded: root.myMergeRequestsExpanded = !root.myMergeRequestsExpanded
+            delegateComponent: myMergeRequestDelegate
           }
 
           DashboardSection {
             visible: count > 0
             title: "ASSIGNED ISSUES"
-            count: github.assignedIssues.length
-            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)
+            count: gitlab.assignedIssues.length
+            model: root.sectionRows(gitlab.assignedIssues, root.issuesExpanded)
             expanded: root.issuesExpanded
             footerButtonsBordered: true
-            openUrl: "https://github.com/issues/assigned"
+            openUrl: gitlab.host + "/dashboard/issues?assignee_username=" + gitlab.login
             onToggleExpanded: root.issuesExpanded = !root.issuesExpanded
             delegateComponent: issueDelegate
           }
 
           DashboardSection {
             visible: count > 0
-            title: "RUNNING ACTIONS"
-            count: github.actions.length
-            model: root.sectionRows(github.actions, root.actionsExpanded)
-            expanded: root.actionsExpanded
-            onToggleExpanded: root.actionsExpanded = !root.actionsExpanded
-            delegateComponent: actionDelegate
+            title: "RUNNING PIPELINES"
+            count: gitlab.pipelines.length
+            model: root.sectionRows(gitlab.pipelines, root.pipelinesExpanded)
+            expanded: root.pipelinesExpanded
+            onToggleExpanded: root.pipelinesExpanded = !root.pipelinesExpanded
+            delegateComponent: pipelineDelegate
           }
 
           DashboardSection {
             visible: count > 0
-            title: "RECENT FAILED ACTIONS"
-            count: github.failedActions.length
-            model: root.sectionRows(github.failedActions, root.failuresExpanded)
+            title: "RECENT FAILED PIPELINES"
+            count: gitlab.failedPipelines.length
+            model: root.sectionRows(gitlab.failedPipelines, root.failuresExpanded)
             expanded: root.failuresExpanded
             onToggleExpanded: root.failuresExpanded = !root.failuresExpanded
-            delegateComponent: failedActionDelegate
+            delegateComponent: failedPipelineDelegate
           }
 
           PanelSeparator { foreground: root.foreground }
@@ -547,8 +547,8 @@ Panel {
           PanelSectionHeader {
             width: parent.width
             // Driven by the fetched scope, not the setting, so it cannot claim
-            // to list organization repositories before a refresh brings them in.
-            text: (github.fetchedRepositoryScope === "owned" ? "OWNED REPOSITORIES  " : "REPOSITORIES  ") + root.displayedRepositories.length + "/" + github.repositories.length
+            // to list every membership project before a refresh brings them in.
+            text: (gitlab.fetchedProjectScope === "owned" ? "OWNED PROJECTS  " : "PROJECTS  ") + root.displayedProjects.length + "/" + gitlab.projects.length
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -557,7 +557,7 @@ Panel {
             id: search
             width: parent.width
             foreground: root.foreground
-            placeholderText: "Filter repositories  /"
+            placeholderText: "Filter projects  /"
             text: root.query
             onTextChanged: root.query = text
             Keys.onEscapePressed: function(event) {
@@ -617,9 +617,9 @@ Panel {
           }
 
           Text {
-            visible: root.displayedRepositories.length === 0
+            visible: root.displayedProjects.length === 0
             width: parent.width
-            text: github.repositories.length === 0 ? "No repositories loaded." : "No repositories match these filters."
+            text: gitlab.projects.length === 0 ? "No projects loaded." : "No projects match these filters."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -630,22 +630,22 @@ Panel {
             width: parent.width
             spacing: Style.space(4)
             Repeater {
-              model: root.displayedRepositories
-              RepoRow {
+              model: root.displayedProjects
+              ProjectRow {
                 required property var modelData
                 required property int index
                 width: parent.width
-                repo: modelData
+                project: modelData
                 rowIndex: index
               }
             }
           }
 
           Text {
-            visible: github.rateLimit && github.rateLimit.remaining !== undefined
+            visible: gitlab.rateLimit && gitlab.rateLimit.remaining !== undefined
             width: parent.width
-            text: "API requests remaining: " + (github.rateLimit ? github.rateLimit.remaining : "") +
-              (github.fetchedAt !== "" ? " · updated " + root.relativeTime(github.fetchedAt) : "")
+            text: "API requests remaining: " + (gitlab.rateLimit ? gitlab.rateLimit.remaining : "") +
+              (gitlab.fetchedAt !== "" ? " · updated " + root.relativeTime(gitlab.fetchedAt) : "")
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -697,7 +697,7 @@ Panel {
               spacing: Style.space(3)
 
               Text {
-                text: "GITHUB SETTINGS"
+                text: "GITLAB SETTINGS"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.title
@@ -753,7 +753,7 @@ Panel {
 
                 // Binding element (not an inline binding) so it survives the
                 // imperative `value` write Dropdown makes on selection.
-                Binding on value { value: github.linkBehavior }
+                Binding on value { value: gitlab.linkBehavior }
               }
             }
 
@@ -762,7 +762,7 @@ Panel {
               spacing: Style.space(6)
 
               Text {
-                text: "REPOSITORY SCOPE"
+                text: "PROJECT SCOPE"
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -770,17 +770,17 @@ Panel {
               }
 
               Dropdown {
-                id: repositoryScopeDropdown
+                id: projectScopeDropdown
                 width: parent.width
                 showLabel: false
-                options: root.repositoryScopeOptions
+                options: root.projectScopeOptions
                 foreground: root.foreground
                 background: Color.popups.background
                 accent: Color.accent
                 fontFamily: root.fontFamily
-                onChanged: function(value) { root.persistSettings({ repositoryScope: value }) }
+                onChanged: function(value) { root.persistSettings({ projectScope: value }) }
 
-                Binding on value { value: String(root.setting("repositoryScope", "Owned")) }
+                Binding on value { value: String(root.setting("projectScope", "Owned")) }
               }
             }
 
@@ -820,18 +820,18 @@ Panel {
             Toggle {
               width: parent.width
               label: "Keep the bar icon unlit"
-              description: "Leave the Octocat dim even when notifications, reviews, or failing actions are waiting."
-              checked: github.iconAlwaysUnlit
+              description: "Leave the icon dim even when notifications, reviews, or failing pipelines are waiting."
+              checked: gitlab.iconAlwaysUnlit
               foreground: root.foreground
               accent: Color.accent
               fontFamily: root.fontFamily
-              onClicked: root.persistSettings({ iconAlwaysUnlit: !github.iconAlwaysUnlit })
+              onClicked: root.persistSettings({ iconAlwaysUnlit: !gitlab.iconAlwaysUnlit })
             }
 
             Toggle {
               width: parent.width
-              label: "Include archived repositories"
-              description: "Show repositories that have been archived on GitHub."
+              label: "Include archived projects"
+              description: "Show projects that have been archived on GitLab."
               checked: root.setting("includeArchived", false) === true
               foreground: root.foreground
               accent: Color.accent
@@ -841,8 +841,8 @@ Panel {
 
             Toggle {
               width: parent.width
-              label: "Include forked repositories"
-              description: "Show repositories you forked from someone else."
+              label: "Include forked projects"
+              description: "Show projects you forked from someone else."
               checked: root.setting("includeForks", false) === true
               foreground: root.foreground
               accent: Color.accent
@@ -852,7 +852,7 @@ Panel {
 
             Text {
               width: parent.width
-              text: "The remaining options — Actions scanning, review request filters, and display limits — stay in Omarchy's bar widget settings."
+              text: "The remaining options — pipeline scanning, review request filters, and display limits — stay in Omarchy's bar widget settings."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -873,7 +873,7 @@ Panel {
       rowKind: "notification"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      glyph: modelData.type === "PullRequest" ? "" : "󰍩"
+      glyph: modelData.type === "MergeRequest" ? "" : "󰍩"
       title: modelData.title
       detail: modelData.repository + " · " + modelData.reason + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
@@ -892,7 +892,7 @@ Panel {
       rowKind: "review"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      glyph: ""
+      glyph: ""
       title: modelData.title
       // Drafts only appear here when the setting is on, and the reason to turn
       // it on is knowing which requests are early feedback rather than a real
@@ -903,22 +903,23 @@ Panel {
   }
 
   Component {
-    id: myPullRequestDelegate
+    id: myMergeRequestDelegate
     LinkRow {
       required property var modelData
       required property int index
       readonly property string checks: String(modelData.checks || "NONE")
-      readonly property bool broken: github.isBrokenCheck(checks)
-      readonly property bool running: github.isRunningCheck(checks)
+      readonly property bool broken: gitlab.isBrokenCheck(checks)
+      readonly property bool running: gitlab.isRunningCheck(checks)
       width: parent ? parent.width : 0
-      rowKind: "mypull"
+      rowKind: "mymr"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      // A repository with no workflows reports no rollup at all, which the
-      // plain pull request glyph conveys without implying a pending run.
-      glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))
+      // A merge request with no configured pipeline reports no rollup at all,
+      // which the plain merge request glyph conveys without implying a
+      // pending run.
+      glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))
       title: modelData.title
-      detail: modelData.repository + " #" + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
+      detail: modelData.repository + " !" + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       danger: broken
       pulse: running
@@ -942,12 +943,12 @@ Panel {
   }
 
   Component {
-    id: actionDelegate
+    id: pipelineDelegate
     LinkRow {
       required property var modelData
       required property int index
       width: parent ? parent.width : 0
-      rowKind: "action"
+      rowKind: "pipeline"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
       glyph: "󰑮"
@@ -959,17 +960,17 @@ Panel {
   }
 
   Component {
-    id: failedActionDelegate
+    id: failedPipelineDelegate
     LinkRow {
       required property var modelData
       required property int index
       width: parent ? parent.width : 0
-      rowKind: "failure"
+      rowKind: "failedpipeline"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
       glyph: "󰅖"
       title: modelData.name
-      detail: modelData.repository + " · " + modelData.conclusion + " · " + root.relativeTime(modelData.updatedAt)
+      detail: modelData.repository + " · " + modelData.status + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       danger: true
     }
@@ -1134,7 +1135,7 @@ Panel {
       }
       Button {
         visible: sectionFooter.showOpen
-        text: "Open in GitHub  󰅂"
+        text: "Open in GitLab  󰅂"
         bordered: sectionFooter.expandable || section.footerButtonsBordered
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -1249,37 +1250,37 @@ Panel {
       PanelActionButton {
         id: readAction
         anchors.fill: parent
-        enabled: github.markingNotificationId !== linkRow.notificationId
-        iconText: github.markingNotificationId === linkRow.notificationId ? "󰑐" : "󰄬"
+        enabled: gitlab.markingNotificationId !== linkRow.notificationId
+        iconText: gitlab.markingNotificationId === linkRow.notificationId ? "󰑐" : "󰄬"
         tooltipText: "Mark this notification read (M)"
         foreground: root.foreground
         hoverColor: Color.accent
         fontFamily: root.fontFamily
         bordered: false
-        onClicked: github.markNotificationRead(linkRow.notificationId)
+        onClicked: gitlab.markNotificationRead(linkRow.notificationId)
       }
     }
   }
 
-  component RepoRow: CursorSurface {
-    id: repoRow
-    property var repo: null
+  component ProjectRow: CursorSurface {
+    id: projectRow
+    property var project: null
     property int rowIndex: 0
-    readonly property string cursorKey: root.targetKey("repository", repo, rowIndex)
+    readonly property string cursorKey: root.targetKey("project", project, rowIndex)
     hasCursor: root.cursorActive && root.selectedKey() === cursorKey
-    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(repoRow)
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(projectRow)
     foreground: root.foreground
-    implicitHeight: repoLayout.implicitHeight + Style.space(16)
+    implicitHeight: projectLayout.implicitHeight + Style.space(16)
 
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onEntered: root.selectKey(repoRow.cursorKey)
-      onClicked: if (repoRow.repo) root.openUrl(repoRow.repo.url)
+      onEntered: root.selectKey(projectRow.cursorKey)
+      onClicked: if (projectRow.project) root.openUrl(projectRow.project.url)
     }
     RowLayout {
-      id: repoLayout
+      id: projectLayout
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -1291,7 +1292,7 @@ Panel {
         spacing: Style.space(2)
         Text {
           Layout.fillWidth: true
-          text: repoRow.repo ? repoRow.repo.nameWithOwner : ""
+          text: projectRow.project ? projectRow.project.nameWithOwner : ""
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -1300,13 +1301,13 @@ Panel {
         Text {
           Layout.fillWidth: true
           text: {
-            if (!repoRow.repo) return ""
-            var parts = ["Issues " + Number(repoRow.repo.issues || 0),
-                         "PRs " + Number(repoRow.repo.prs || 0),
-                         "Stars " + Number(repoRow.repo.stars || 0)]
-            if (Number(repoRow.repo.activeActions || 0) > 0)
-              parts.push("Actions " + Number(repoRow.repo.activeActions))
-            parts.push("updated " + root.relativeTime(repoRow.repo.updatedAt))
+            if (!projectRow.project) return ""
+            var parts = ["Issues " + Number(projectRow.project.issues || 0),
+                         "MRs " + Number(projectRow.project.prs || 0),
+                         "Stars " + Number(projectRow.project.stars || 0)]
+            if (Number(projectRow.project.activePipelines || 0) > 0)
+              parts.push("Pipelines " + Number(projectRow.project.activePipelines))
+            parts.push("updated " + root.relativeTime(projectRow.project.updatedAt))
             return parts.join("  ·  ")
           }
           color: root.dim

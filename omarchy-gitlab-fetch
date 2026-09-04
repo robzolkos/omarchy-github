@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# Aggregate GitLab dashboard data for the Omarchy GitLab widget.
+# Authentication is delegated entirely to the glab CLI credential store.
+set -uo pipefail
+
+include_archived=false
+include_forks=false
+include_archived_reviews=false
+include_draft_reviews=false
+project_scope="owned"
+pipeline_scan="recent"
+pipeline_limit=15
+concurrency=6
+failed_days=7
+failed_limit=20
+hostname=""
+mark_notifications=()
+
+usage() {
+  cat <<'EOF'
+Usage: omarchy-gitlab-fetch [options]
+  --include-archived BOOL       Include archived projects (default: false)
+  --include-forks BOOL          Include projects that are forks (default: false)
+  --include-archived-reviews BOOL
+                                Include review requests and assigned issues in
+                                archived projects (default: false)
+  --include-draft-reviews BOOL  Include review requests on draft merge requests
+                                (default: false)
+  --project-scope MODE          owned, or membership to also list every project
+                                you are a member of, including group projects
+                                (default: owned)
+  --pipeline-scan MODE          off, recent, or all (default: recent)
+  --pipeline-scan-limit N       Projects scanned in recent mode (default: 15)
+  --concurrency N               Concurrent pipeline requests, 1-12 (default: 6)
+  --failed-days N               Show failed pipelines from the last N days, 1-30 (default: 7)
+  --failed-limit N              Maximum recent failed pipelines (default: 20)
+  --hostname HOST               GitLab host to use instead of glab's configured default
+  --mark-notification-read ID   Mark one todo done; repeat to mark several in one
+                                run, stopping at the first failure
+EOF
+}
+
+bool() { [[ ${1,,} == true || $1 == 1 || ${1,,} == yes || ${1,,} == on ]]; }
+integer() { [[ $1 =~ ^[0-9]+$ ]]; }
+
+while (($#)); do
+  case "$1" in
+    --include-archived) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived=$2; shift 2 ;;
+    --include-forks) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_forks=$2; shift 2 ;;
+    --include-archived-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived_reviews=$2; shift 2 ;;
+    --include-draft-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_draft_reviews=$2; shift 2 ;;
+    --project-scope) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; project_scope=${2,,}; shift 2 ;;
+    --pipeline-scan) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; pipeline_scan=${2,,}; shift 2 ;;
+    --pipeline-scan-limit) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; pipeline_limit=$2; shift 2 ;;
+    --concurrency) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; concurrency=$2; shift 2 ;;
+    --failed-days) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; failed_days=$2; shift 2 ;;
+    --failed-limit) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; failed_limit=$2; shift 2 ;;
+    --hostname) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; hostname=$2; shift 2 ;;
+    --mark-notification-read) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_notifications+=("$2"); shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+integer "$pipeline_limit" && ((pipeline_limit >= 1 && pipeline_limit <= 500)) || { echo "invalid --pipeline-scan-limit" >&2; exit 2; }
+integer "$concurrency" && ((concurrency >= 1 && concurrency <= 12)) || { echo "invalid --concurrency" >&2; exit 2; }
+integer "$failed_days" && ((failed_days >= 1 && failed_days <= 30)) || { echo "invalid --failed-days" >&2; exit 2; }
+integer "$failed_limit" && ((failed_limit >= 1 && failed_limit <= 100)) || { echo "invalid --failed-limit" >&2; exit 2; }
+[[ $pipeline_scan == off || $pipeline_scan == recent || $pipeline_scan == all ]] || { echo "invalid --pipeline-scan" >&2; exit 2; }
+[[ $project_scope == owned || $project_scope == membership ]] || { echo "invalid --project-scope" >&2; exit 2; }
+for id in "${mark_notifications[@]:-}"; do
+  [[ -z $id ]] && continue
+  [[ $id =~ ^[0-9]+$ ]] || { echo "invalid --mark-notification-read id: $id" >&2; exit 2; }
+done
+# Interpolated into the GraphQL document, so it comes from the validated enum
+# above. The argument itself never reaches the query.
+if [[ $project_scope == membership ]]; then scope_arg="membership: true"; else scope_arg="personal: true"; fi
+
+hostflag=()
+[[ -n $hostname ]] && hostflag=(--hostname "$hostname")
+
+emit_state() {
+  jq -n --arg state "$1" --arg message "$2" --arg scope "$project_scope" --arg host "$host_url" '{schemaVersion:1,state:$state,message:$message,host:$host,login:"",projectScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myMergeRequests:[],myMergeRequestsTotal:0,pipelines:[],failedPipelines:[],projects:[],warnings:[],rateLimit:null}'
+}
+
+command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"error","message":"jq is required.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myMergeRequests":[],"myMergeRequestsTotal":0,"pipelines":[],"failedPipelines":[],"projects":[],"warnings":[]}' ; exit 0; }
+command -v glab >/dev/null 2>&1 || { host_url=""; emit_state glab-not-installed "GitLab CLI (glab) is not installed or not on PATH."; exit 0; }
+
+# The host is used only to build dashboard links; it never gates a fetch. A
+# missing config falls back to gitlab.com's own default rather than failing.
+config_host=$(glab config get -g host 2>/dev/null || true)
+resolved_host=${hostname:-${config_host:-gitlab.com}}
+protocol=$(glab config get -g api_protocol 2>/dev/null || true)
+host_url="${protocol:-https}://$resolved_host"
+
+glab auth status "${hostflag[@]}" >/dev/null 2>&1 || { emit_state logged-out "Sign in with glab auth login to load GitLab data."; exit 0; }
+
+error_detail() {
+  tr '\n' ' ' <"$1" |
+    sed -E 's/(glpat-[A-Za-z0-9_-]{20,})/[REDACTED]/g; s/(Authorization: *(token|Bearer) +)[^ ]+/\1[REDACTED]/Ig; s/[[:space:]]+/ /g; s/^ //; s/ $//' |
+    cut -c1-240
+}
+
+if ((${#mark_notifications[@]} > 0)); then
+  if ! error=$(mktemp); then
+    jq -n '{state:"error",message:"Could not prepare the notification request."}'
+    exit 1
+  fi
+  for id in "${mark_notifications[@]}"; do
+    if ! glab api "${hostflag[@]}" --method POST "todos/$id/mark_as_done" >/dev/null 2>"$error"; then
+      detail=$(error_detail "$error")
+      rm -f "$error"
+      jq -n --arg id "$id" --arg message "${detail:-Could not mark notification read.}" '{state:"error",message:$message,notificationId:$id}'
+      exit 1
+    fi
+  done
+  rm -f "$error"
+  jq -n '{state:"ready",message:"Notification marked read."}'
+  exit 0
+fi
+
+if ! tmp=$(mktemp -d); then
+  emit_state error "Could not prepare temporary storage for the GitLab refresh."
+  exit 1
+fi
+trap 'rm -rf "$tmp"' EXIT
+warnings="$tmp/warnings"
+: >"$warnings"
+api_error() {
+  local label=$1 err=$2 detail
+  detail=$(error_detail "$err")
+  [[ -n $detail ]] || detail="request failed"
+  printf '%s: %s\n' "$label" "$detail" >>"$warnings"
+}
+
+fetch_paginated() {
+  local label=$1 endpoint=$2 output=$3
+  local err="$tmp/$label.err"
+  if glab api "${hostflag[@]}" --paginate "$endpoint" >"$output" 2>"$err"; then return 0; fi
+  api_error "$label" "$err"
+  return 1
+}
+
+# Todos are GitLab's notification inbox: mentions, assignments, review
+# requests, and pipeline/CI events that need your attention. target_url is
+# already a ready web link, unlike GitHub's API-shaped subject URLs.
+if fetch_paginated notifications 'todos?state=pending&per_page=100' "$tmp/notifications.pages"; then
+  jq -s '[.[][] | {id:(.id|tostring),reason:(.action_name // ""),updatedAt:(.updated_at // ""),
+    repository:(.project.path_with_namespace // ""),title:(.target.title // ""),type:(.target_type // ""),
+    url:(.target_url // "")}] | sort_by(.updatedAt) | reverse' "$tmp/notifications.pages" >"$tmp/notifications.json" 2>/dev/null || { printf '[]\n' >"$tmp/notifications.json"; printf '%s\n' 'notifications: invalid API response' >>"$warnings"; }
+else printf '[]\n' >"$tmp/notifications.json"; fi
+
+# Authored merge requests come from GraphQL, bundled with the current user's
+# username, so the head pipeline's status arrives with them at no extra
+# request cost and every other section can filter by username below.
+my_mr_query='query($first:Int!,$includeArchived:Boolean!){ currentUser { username authoredMergeRequests(state:opened,sort:UPDATED_DESC,first:$first,includeArchived:$includeArchived) { count nodes { iid title webUrl updatedAt draft project { fullPath } headPipeline { status } } } } }'
+printf '[]\n' >"$tmp/mypulls.json"
+printf '0\n' >"$tmp/mypulls-total.json"
+login=""
+if my_mrs=$(glab api "${hostflag[@]}" graphql -f query="$my_mr_query" -F first=50 -F includeArchived="$(bool "$include_archived" && echo true || echo false)" 2>"$tmp/mypulls.err"); then
+  login=$(printf '%s\n' "$my_mrs" | jq -r '.data.currentUser.username // ""' 2>/dev/null)
+  # A merge request with no configured pipeline reports a null headPipeline,
+  # which is a distinct state from pending and must not be rendered as one.
+  printf '%s\n' "$my_mrs" | jq '[.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid != null) |
+    {id:((.project.fullPath // "") + "!" + (.iid|tostring)),number:(.iid|tonumber),title:(.title // ""),
+     repository:(.project.fullPath // ""),url:(.webUrl // ""),updatedAt:(.updatedAt // ""),
+     draft:(.draft // false),checks:(.headPipeline.status // "NONE" | ascii_upcase | if . == "SUCCESS" then "SUCCESS" elif . == "FAILED" then "FAILURE" elif (. == "RUNNING" or . == "PENDING" or . == "CREATED" or . == "PREPARING" or . == "WAITING_FOR_RESOURCE") then "PENDING" elif . == "NONE" then "NONE" else . end)}]
+    | sort_by(.updatedAt) | reverse' >"$tmp/mypulls.json" 2>/dev/null || { printf '[]\n' >"$tmp/mypulls.json"; printf '%s\n' 'my-merge-requests: invalid API response' >>"$warnings"; }
+  printf '%s\n' "$my_mrs" | jq '.data.currentUser.authoredMergeRequests.count // 0' >"$tmp/mypulls-total.json" 2>/dev/null || printf '0\n' >"$tmp/mypulls-total.json"
+else
+  api_error my-merge-requests "$tmp/mypulls.err"
+fi
+
+fetch_user_scoped() {
+  local label=$1 endpoint=$2 output=$3
+  local pages="$tmp/$label.pages"
+  if fetch_paginated "$label" "$endpoint" "$pages"; then
+    jq -s '[.[][] | {id:(.id|tostring),number:.iid,title:(.title // ""),
+      repository:(.references.full // "" | sub("[!#][0-9]+$";"")),url:(.web_url // ""),
+      updatedAt:(.updated_at // ""),user:(.author.username // ""),draft:(.draft // false)}] | sort_by(.updatedAt) | reverse' "$pages" >"$output" 2>/dev/null || { printf '[]\n' >"$output"; printf '%s: invalid API response\n' "$label" >>"$warnings"; }
+  else printf '[]\n' >"$output"; fi
+}
+
+printf '[]\n' >"$tmp/reviews.json"
+printf '[]\n' >"$tmp/issues.json"
+if [[ -n $login ]]; then
+  # An archived project is read-only, so a review request or assignment
+  # raised against it cannot be resolved: it would otherwise linger forever.
+  if bool "$include_archived_reviews"; then archived_q=""; else archived_q="&non_archived=true"; fi
+  if bool "$include_draft_reviews"; then draft_q=""; else draft_q="&draft=no"; fi
+  fetch_user_scoped review-requests "merge_requests?scope=all&state=opened&reviewer_username=$login$draft_q$archived_q&per_page=100" "$tmp/reviews.json"
+  fetch_user_scoped assigned-issues "issues?scope=all&state=opened&assignee_username=$login$archived_q&per_page=100" "$tmp/issues.json"
+else
+  printf '%s\n' 'review-requests: could not resolve the current username' >>"$warnings"
+  printf '%s\n' 'assigned-issues: could not resolve the current username' >>"$warnings"
+fi
+
+cursor=null
+printf '[]\n' >"$tmp/projects.json"
+graphql_ok=true
+projects_query='query($cursor:String){ projects('"$scope_arg"',first:100,after:$cursor,sort:"latest_activity_desc") { count pageInfo { hasNextPage endCursor } nodes { id fullPath webUrl archived isForked starCount forksCount lastActivityAt issues(state:opened){count} mergeRequests(state:opened){count} } } }'
+while :; do
+  if ! page=$(glab api "${hostflag[@]}" graphql -f query="$projects_query" -F cursor="$cursor" 2>"$tmp/graphql.err"); then api_error projects "$tmp/graphql.err"; graphql_ok=false; break; fi
+  printf '%s\n' "$page" >"$tmp/page.json"
+  jq '[.data.projects.nodes[] | {name:(.fullPath|split("/")|last),nameWithOwner:.fullPath,url:.webUrl,archived:.archived,fork:.isForked,stars:.starCount,issues:.issues.count,prs:.mergeRequests.count,updatedAt:.lastActivityAt,activePipelines:0,id:((.id // "" | capture("(?<n>[0-9]+)$")?.n) // "")}]' "$tmp/page.json" >"$tmp/page.projects" 2>/dev/null || printf '[]\n' >"$tmp/page.projects"
+  jq -s '.[0]+.[1]' "$tmp/projects.json" "$tmp/page.projects" >"$tmp/projects.next" && mv "$tmp/projects.next" "$tmp/projects.json"
+  [[ $(jq -r '.data.projects.pageInfo.hasNextPage // false' "$tmp/page.json") == true ]] || break
+  cursor=$(jq -r '.data.projects.pageInfo.endCursor // empty' "$tmp/page.json")
+  [[ -n $cursor ]] || { printf '%s\n' 'projects: pagination cursor missing' >>"$warnings"; graphql_ok=false; break; }
+done
+if bool "$include_archived"; then archived_filter=true; else archived_filter=false; fi
+if bool "$include_forks"; then fork_filter=true; else fork_filter=false; fi
+jq --argjson archived "$archived_filter" --argjson forks "$fork_filter" '[.[]|select(($archived or (.archived|not)) and ($forks or (.fork|not)))]' "$tmp/projects.json" >"$tmp/projects.filtered" && mv "$tmp/projects.filtered" "$tmp/projects.json"
+
+# Active states are queried independently and paginated so a busy project
+# cannot hide a queued pipeline behind 100 finished ones. Finished pipelines
+# are server-bounded by updated_after and paginated, which keeps the request
+# count proportional to relevant history rather than all-time history.
+printf '[]\n' >"$tmp/pipelines.json"; printf '[]\n' >"$tmp/failed.json"
+if [[ $pipeline_scan != off && $(jq 'length' "$tmp/projects.json") -gt 0 ]]; then
+  if [[ $pipeline_scan == recent ]]; then jq -r --argjson limit "$pipeline_limit" 'sort_by(.updatedAt)|reverse|.[:$limit]|.[]|select(.id != "")|.id + " " + .nameWithOwner' "$tmp/projects.json" >"$tmp/scan-projects"; else jq -r '.[]|select(.id != "")|.id + " " + .nameWithOwner' "$tmp/projects.json" >"$tmp/scan-projects"; fi
+  cutoff_iso=$(date -u -d "-$failed_days days" +%Y-%m-%dT%H:%M:%SZ)
+  cutoff_epoch=$(date -u -d "-$failed_days days" +%s)
+  scan_one() {
+    local id=$1 repo=$2 failed=false
+    : >"$tmp/pipeline-$id.active.pages"; : >"$tmp/pipeline-$id.completed.pages"; : >"$tmp/pipeline-$id.err"
+    local status
+    for status in created waiting_for_resource preparing pending running; do
+      if ! glab api "${hostflag[@]}" --paginate "projects/$id/pipelines?status=$status&per_page=100" >>"$tmp/pipeline-$id.active.pages" 2>>"$tmp/pipeline-$id.err"; then failed=true; fi
+    done
+    if ! glab api "${hostflag[@]}" --paginate "projects/$id/pipelines?status=failed&updated_after=$cutoff_iso&per_page=100" >"$tmp/pipeline-$id.completed.pages" 2>>"$tmp/pipeline-$id.err"; then failed=true; fi
+    jq -s --arg repo "$repo" '[.[][]?|{id,repository:$repo,name:(.name // .source // "Pipeline"),status:(.status // ""),event:(.source // ""),branch:(.ref // ""),url:(.web_url // ""),createdAt:(.created_at // ""),updatedAt:(.updated_at // "")}]|unique_by(.id)' "$tmp/pipeline-$id.active.pages" >"$tmp/pipeline-$id.active.json" 2>/dev/null || printf '[]\n' >"$tmp/pipeline-$id.active.json"
+    jq -s --arg repo "$repo" '[.[][]?|{id,repository:$repo,name:(.name // .source // "Pipeline"),status:(.status // ""),event:(.source // ""),branch:(.ref // ""),url:(.web_url // ""),createdAt:(.created_at // ""),updatedAt:(.updated_at // "")}]|unique_by(.id)' "$tmp/pipeline-$id.completed.pages" >"$tmp/pipeline-$id.completed.json" 2>/dev/null || printf '[]\n' >"$tmp/pipeline-$id.completed.json"
+    if [[ $failed == true ]]; then api_error "pipelines $repo" "$tmp/pipeline-$id.err"; fi
+  }
+  export tmp warnings cutoff_iso hostflag
+  export -f scan_one api_error error_detail
+  xargs -r -P "$concurrency" -L1 bash -c 'scan_one "$1" "$2"' _ <"$tmp/scan-projects"
+  jq -s 'add // []|unique_by(.id)|sort_by(.createdAt)|reverse' "$tmp"/pipeline-*.active.json >"$tmp/pipelines.json" 2>/dev/null || printf '[]\n' >"$tmp/pipelines.json"
+  jq -s --argjson cutoff "$cutoff_epoch" --argjson limit "$failed_limit" 'add // []|[.[]|select((.status=="failed") and ((.createdAt|fromdateiso8601) >= $cutoff))]|unique_by(.id)|sort_by(.updatedAt)|reverse|.[:$limit]' "$tmp"/pipeline-*.completed.json >"$tmp/failed.json" 2>/dev/null || printf '[]\n' >"$tmp/failed.json"
+  jq --slurpfile pipelines "$tmp/pipelines.json" 'map(. as $repo|.activePipelines=([$pipelines[0][]|select(.repository==$repo.nameWithOwner)]|length))' "$tmp/projects.json" >"$tmp/projects.next" && mv "$tmp/projects.next" "$tmp/projects.json"
+fi
+jq 'map(del(.id))' "$tmp/projects.json" >"$tmp/projects.next" && mv "$tmp/projects.next" "$tmp/projects.json"
+
+warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
+project_count=$(jq 'length' "$tmp/projects.json")
+if [[ $graphql_ok == false && $project_count -eq 0 ]]; then state=error; message="GitLab projects could not be loaded."; else state=ready; message=""; fi
+if grep -qiE 'rate.?limit|429|too many requests' "$warnings"; then state=rate-limited; message="GitLab API rate limit reached."; fi
+jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$project_scope" --arg host "$host_url" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile pipelines "$tmp/pipelines.json" --slurpfile failed "$tmp/failed.json" --slurpfile projects "$tmp/projects.json" --argjson warnings "$warnings_json" '{schemaVersion:1,state:$state,message:$message,host:$host,login:$login,projectScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myMergeRequests:$mypulls[0],myMergeRequestsTotal:$mypullstotal[0],pipelines:$pipelines[0],failedPipelines:$failed[0],projects:$projects[0],warnings:$warnings,rateLimit:null}'
