@@ -1,19 +1,19 @@
 {
   "schemaVersion": 1,
-  "id": "pranavbabu.forge",
-  "name": "Forge",
-  "version": "0.1.0",
-  "author": "Pranav Babu",
+  "id": "robzolkos.github",
+  "name": "GitHub",
+  "version": "0.4.0",
+  "author": "Rob Zolkos",
   "license": "MIT",
-  "description": "A keyboard-friendly GitHub or GitLab inbox for notifications, review requests, your own pull/merge requests, assigned issues, Actions/pipelines, and repositories/projects.",
+  "description": "A keyboard-friendly GitHub inbox for notifications, review requests, your own pull requests, assigned issues, Actions, and repositories — now with optional GitLab support (gitlab.com or self-hosted) behind a Provider setting.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
     "barWidget": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Forge",
-    "description": "One provider at a time: act on unread notifications and browse review requests, your authored pull or merge requests with their check/pipeline state, assigned issues, active or failed Actions/pipelines, and repository metrics. Switch GitHub and GitLab from Provider in settings.",
+    "displayName": "GitHub",
+    "description": "Act on unread notifications and browse review requests, your authored pull/merge requests with their check/pipeline state, assigned issues, active or failed Actions/pipelines, and repository metrics. GitHub by default; switch to GitLab from Provider in settings.",
     "category": "Development",
     "aliases": ["github", "gitlab", "octocat", "merge-requests", "repos", "projects", "actions", "pipelines"],
     "allowMultiple": false,
@@ -37,7 +37,7 @@
       "iconAlwaysUnlit": false
     },
     "schema": [
-      { "key": "provider", "type": "enum", "label": "Provider", "options": ["GitHub", "GitLab"], "defaultValue": "GitHub", "description": "Which forge this widget talks to. One provider at a time; switching re-fetches from the new one immediately." },
+      { "key": "provider", "type": "enum", "label": "Provider", "options": ["GitHub", "GitLab"], "defaultValue": "GitHub", "description": "Which service this widget talks to. One provider at a time; switching re-fetches from the new one immediately." },
       { "key": "gitlabHost", "type": "string", "label": "GitLab host", "description": "Only used when Provider is GitLab. Hostname of a self-hosted instance, e.g. gitlab.example.com. Leave blank to use glab's configured default host." },
       { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 60, "max": 3600, "step": 60, "defaultValue": 900 },
       { "key": "linkBehavior", "type": "enum", "label": "Open links", "options": ["Browser tab", "Web app window"], "defaultValue": "Web app window", "description": "Open links in a browser tab, or in a dedicated web app window. The web app window requires a Chromium-based default browser." },

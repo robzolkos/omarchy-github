@@ -8,8 +8,8 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "pranavbabu.forge"
-  ipcTarget: "pranavbabu.forge"
+  moduleName: "robzolkos.github"
+  ipcTarget: "robzolkos.github"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground

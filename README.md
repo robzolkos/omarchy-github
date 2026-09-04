@@ -1,8 +1,8 @@
-# Omarchy Forge
+# Omarchy GitHub
 
 Your GitHub or GitLab work, directly in the Omarchy bar — one widget, one provider at a time.
 
-**Forge** turns a single bar icon into a fast, keyboard-friendly command center for everything that needs your attention on GitHub or GitLab (gitlab.com or a self-hosted instance) — without keeping another browser tab open. It started as [Omarchy GitHub](https://github.com/robzolkos/omarchy-github) by Rob Zolkos, was ported to GitLab, and is now both at once: pick **Provider** in settings and the whole dashboard — terminology, icon, and deep links included — follows.
+**Omarchy GitHub** turns a single bar icon into a fast, keyboard-friendly command center for everything that needs your attention on GitHub or GitLab (gitlab.com or a self-hosted instance) — without keeping another browser tab open. GitHub is the default and original provider; pick **Provider: GitLab** in settings and the whole dashboard — terminology, icon, and deep links included — follows.
 
 If you use both GitHub and a self-hosted GitLab, install this plugin twice under different local checkouts (see [Running two instances](#running-two-instances)) rather than expecting one widget to show both at once; that was a deliberate scope decision, not a limitation to work around.
 
@@ -66,56 +66,44 @@ glab config set -g host gitlab.example.com
 glab auth status --hostname gitlab.example.com
 ```
 
-The default `gh`/`glab` API scope is enough to read notifications, pull/merge requests, issues, runs, and repositories/projects, and to mark notifications/to-dos read. Forge delegates authentication entirely to the CLI. It does not read, copy, log, or persist your token.
+The default `gh`/`glab` API scope is enough to read notifications, pull/merge requests, issues, runs, and repositories/projects, and to mark notifications/to-dos read. This widget delegates authentication entirely to the CLI. It does not read, copy, log, or persist your token.
 
 ## Install
 
-`omarchy plugin add` clones a git URL's **default branch**; it has no flag to
-select a different one. This unified plugin lives on the `forge` branch of
-this fork (the default `main` branch is still Rob Zolkos's original
-GitHub-only plugin). Install from a local checkout of `forge` instead of the
-bare GitHub URL:
-
 ```bash
-git clone --branch forge https://github.com/pranavbabu/omarchy-github.git /tmp/omarchy-forge
-omarchy plugin add /tmp/omarchy-forge --enable
+omarchy plugin add https://github.com/robzolkos/omarchy-github.git --enable
 ```
 
-Once `forge` is merged to (or replaces) the repository's default branch, the
-direct form works and `omarchy plugin update` tracks it normally:
-
-```bash
-omarchy plugin add https://github.com/pranavbabu/omarchy-github.git --enable
-```
+(While GitLab support is still under review as a pull request rather than merged, install from that branch of the fork proposing it instead: `git clone --branch forge https://github.com/pranavbabu/omarchy-github.git /tmp/omarchy-github && omarchy plugin add /tmp/omarchy-github --enable` — `omarchy plugin add` clones a git URL's default branch, so a plain URL won't pick up an unmerged branch.)
 
 The widget defaults to the right side of the bar and to **Provider: GitHub**. To choose its position interactively:
 
 ```bash
-omarchy bar move pranavbabu.forge
+omarchy bar move robzolkos.github
 ```
 
 Switch to GitLab from the panel's own settings (gear icon), or from the command line:
 
 ```bash
-omarchy bar set pranavbabu.forge provider "GitLab"
+omarchy bar set robzolkos.github provider "GitLab"
 ```
 
 Confirm the installation:
 
 ```bash
-omarchy plugin list | grep pranavbabu.forge
+omarchy plugin list | grep robzolkos.github
 ```
 
 If your `glab` default host is not the GitLab instance you want this widget to use, set it explicitly in the widget's own settings rather than changing `glab`'s global default:
 
 ```bash
-omarchy bar set pranavbabu.forge gitlabHost "gitlab.example.com"
+omarchy bar set robzolkos.github gitlabHost "gitlab.example.com"
 ```
 
 ### Update
 
 ```bash
-omarchy plugin update pranavbabu.forge
+omarchy plugin update robzolkos.github
 ```
 
 If your Omarchy version only supports updating all third-party plugins:
@@ -127,7 +115,7 @@ omarchy plugin update
 ### Remove
 
 ```bash
-omarchy plugin remove pranavbabu.forge
+omarchy plugin remove robzolkos.github
 ```
 
 ### Running two instances
@@ -201,15 +189,15 @@ The everyday options — **Provider**, **GitLab host**, **Open links**, **Reposi
 Set these options from the command line after installing the plugin:
 
 ```bash
-omarchy bar set pranavbabu.forge repositoryScope "Wider"
-omarchy bar set pranavbabu.forge scanBehavior "Recent"
+omarchy bar set robzolkos.github repositoryScope "Wider"
+omarchy bar set robzolkos.github scanBehavior "Recent"
 ```
 
 Restore the narrowest behavior with:
 
 ```bash
-omarchy bar set pranavbabu.forge repositoryScope "Owned"
-omarchy bar set pranavbabu.forge scanBehavior "Off"
+omarchy bar set robzolkos.github repositoryScope "Owned"
+omarchy bar set robzolkos.github scanBehavior "Off"
 ```
 
 Review requests and assigned issues from archived repositories/projects are hidden by default because an archived one is read-only. Review requests on draft pull/merge requests are also hidden by default, while teams that use drafts for early feedback can include them. Each behavior has its own setting.
@@ -278,4 +266,4 @@ A few things do not have a like-for-like equivalent on the other side:
 
 MIT
 
-Started as [Omarchy GitHub](https://github.com/robzolkos/omarchy-github) by Rob Zolkos (MIT licensed), ported to GitLab, then unified into one provider-switchable widget.
+GitLab support (gitlab.com and self-hosted instances) contributed by Pranav Babu.

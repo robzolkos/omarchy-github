@@ -12,9 +12,9 @@ assert_not_contains() {
   [[ $PANEL_SOURCE != *"$1"* ]] || fail "$2"
 }
 
-assert_contains 'moduleName: "pranavbabu.forge"' \
-  "the widget id is not namespaced for the universal Forge plugin"
-assert_contains 'ipcTarget: "pranavbabu.forge"' \
+assert_contains 'moduleName: "robzolkos.github"' \
+  "the widget id changed even though GitLab support must not break existing robzolkos.github installs"
+assert_contains 'ipcTarget: "robzolkos.github"' \
   "the IPC target does not match the widget id"
 assert_contains 'Service { id: svc; settings: root.settings }' \
   "the dashboard service is not wired to the current settings"
