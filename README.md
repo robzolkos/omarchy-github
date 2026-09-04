@@ -71,19 +71,18 @@ The default `gh`/`glab` API scope is enough to read notifications, pull/merge re
 ## Install
 
 `omarchy plugin add` clones a git URL's **default branch**; it has no flag to
-select a different one. This unified plugin lives on the `gitlab-port`
-branch of this fork (a leftover name from when that branch held only the
-GitLab port; the default `main` branch is still Rob Zolkos's original
-GitHub-only plugin). Install from a local checkout of `gitlab-port` instead
-of the bare GitHub URL:
+select a different one. This unified plugin lives on the `forge` branch of
+this fork (the default `main` branch is still Rob Zolkos's original
+GitHub-only plugin). Install from a local checkout of `forge` instead of the
+bare GitHub URL:
 
 ```bash
-git clone --branch gitlab-port https://github.com/pranavbabu/omarchy-github.git /tmp/omarchy-forge
+git clone --branch forge https://github.com/pranavbabu/omarchy-github.git /tmp/omarchy-forge
 omarchy plugin add /tmp/omarchy-forge --enable
 ```
 
-Once `gitlab-port` is merged to (or replaces) the repository's default
-branch, the direct form works and `omarchy plugin update` tracks it normally:
+Once `forge` is merged to (or replaces) the repository's default branch, the
+direct form works and `omarchy plugin update` tracks it normally:
 
 ```bash
 omarchy plugin add https://github.com/pranavbabu/omarchy-github.git --enable
