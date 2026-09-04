@@ -215,7 +215,14 @@ omarchy plugin add "$PWD" --enable
 
 After further edits, `omarchy plugin update <id> --yes` re-clones from the
 same local path and needs a new commit to have anything to pull. The shell
-then watches the installed copy's files, making QML iteration fast.
+then watches the installed copy's files, making QML iteration fast — for most
+edits. If a change doesn't seem to take effect (new IPC functions not showing
+in `qs ipc show`, or a fix that still looks broken after `plugin update` and
+even `plugin disable`/`plugin enable`), don't trust that as a verdict on the
+change: `disable`/`enable` was observed, while building this, to keep serving
+a stale component instead of rebuilding it. Confirm with `omarchy restart
+shell` first — it's slower (it blips the whole bar) but it's the only thing
+that reliably reflects the file on disk.
 
 ## How it works
 
@@ -241,7 +248,7 @@ A few things do not have a like-for-like GitLab equivalent:
 - **Bulk mark-as-read is safer, not identical.** GitHub's `/notifications` endpoint accepts a "mark everything read before this timestamp" call; GitLab's to-do API only marks individual to-dos or every to-do you have, with nothing in between. Marking all as read here submits the exact set of ids displayed on screen instead of a time boundary — a to-do that arrives mid-confirmation is never touched, which is strictly safer than the original's same-second edge case.
 - **No rate-limit footer.** GitHub's GraphQL API returns a `rateLimit` field on every request; self-hosted GitLab instances typically do not expose equivalent throttling headers, so the panel's rate-limit line stays hidden (the field is always `null`).
 - **Dashboard deep links are best-effort.** The "Open in GitLab" links use GitLab's documented `/dashboard/todos`, `/dashboard/merge_requests`, and `/dashboard/issues` paths with username query filters; very old GitLab versions may ignore a filter and show the unfiltered list instead.
-- **Known issue: the GitLab bar icon and a few row icons may not render.** On the machine this was built and tested on, the GitLab icon (originally GitHub's Octocat legacy-PUA codepoint U+F296, then retried as md-gitlab at the newer U+F0BA0) and the merge-request-ish row icons stayed blank in the live bar and panel, despite: the font containing a correct, normal-metrics outline for every codepoint tried; the exact same characters rendering correctly through plain ImageMagick/FreeType against that font file; and a bare `QtQuick.Text` element in a standalone Quickshell process (outside Omarchy's shell entirely) rendering them correctly too. Swapping codepoint ranges (legacy Private Use Area vs. Nerd Fonts' newer ≥ U+F0000 block) did not change the outcome, so the range isn't the cause. The settings gear in the panel header and the trailing `›` chevron on each row — both copied unchanged from the original GitHub plugin, both already in the ≥ U+F0000 range — render fine in the same panel, so it isn't a font, panel, or `Style.font` problem across the board. If you hit this, it's worth checking with Quickshell's own devtools or a QML profiler rather than more codepoint substitution — that's further than static analysis alone could take this.
+- **Icon glyphs use Nerd Fonts' current codepoints (≥ U+F0000), not the legacy Private Use Area ones (U+E000–U+F8FF) GitHub's Octocat used.** Nerd Fonts v3 moved most icons to that newer range and kept the old codepoints only as compatibility aliases; on at least one tested setup, those legacy aliases were present in the font with correct outlines but did not paint in the live shell, while the current-range codepoints (used here and by everything carried over unchanged from the original GitHub plugin) rendered correctly.
 
 ## License
 
