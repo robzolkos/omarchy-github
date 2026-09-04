@@ -217,4 +217,33 @@ chmod +x "$sandbox/glab"
 scoped=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan all)
 assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "pipeline scan warnings keep the API error text"
 
+# --hostname must reach the pipeline scan even though it runs in
+# xargs-spawned subshells that cannot inherit a bash array.
+: >"$GLAB_TEST_LOG"
+cat >"$sandbox/glab" <<'GLAB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GLAB_TEST_LOG"
+args=("$@")
+# The helper places --hostname right after `api`; strip it here so the rest
+# of this stub can dispatch on fixed positions like the other fixtures do.
+if [[ ${args[0]} == api && ${args[1]} == --hostname ]]; then args=(api "${args[@]:3}"); fi
+if [[ ${args[0]} == config ]]; then exit 0; fi
+if [[ ${args[0]} == auth ]]; then exit 0; fi
+if [[ ${args[0]} == api && ${args[1]} == graphql ]]; then
+  if [[ ${args[*]} == *authoredMergeRequests* ]]; then
+    printf '%s\n' '{"data":{"currentUser":{"username":"octocat","authoredMergeRequests":{"count":0,"nodes":[]}}}}'
+    exit 0
+  fi
+  cat <<'JSON'
+{"data":{"projects":{"count":1,"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"gid://gitlab/Project/1","fullPath":"octocat/hello","webUrl":"https://example.gitlab.test/octocat/hello","archived":false,"isForked":false,"starCount":1,"forksCount":0,"lastActivityAt":"2026-01-01T00:00:00Z","issues":{"count":0},"mergeRequests":{"count":0}}]}}}
+JSON
+  exit 0
+fi
+printf '%s\n' '[]'
+GLAB
+chmod +x "$sandbox/glab"
+out_hostname=$(PATH="$sandbox:$PATH" "$HELPER" --pipeline-scan all --hostname example.gitlab.test)
+assert_jq '.state == "ready"' "$out_hostname" "a hostname-scoped run still succeeds"
+grep -q '^api --hostname example.gitlab.test --paginate projects/1/pipelines' "$GLAB_TEST_LOG" || fail "--hostname was dropped from the pipeline scan subshell"
+
 echo "helper tests passed"

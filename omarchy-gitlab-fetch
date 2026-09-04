@@ -223,17 +223,24 @@ if [[ $pipeline_scan != off && $(jq 'length' "$tmp/projects.json") -gt 0 ]]; the
   cutoff_epoch=$(date -u -d "-$failed_days days" +%s)
   scan_one() {
     local id=$1 repo=$2 failed=false
+    # Bash cannot export an array through the environment, so each xargs
+    # subshell rebuilds hostflag from the plain-string GITLAB_HOSTNAME
+    # instead of inheriting the parent's (unexportable) hostflag array. A
+    # subshell that just saw an empty array here would silently drop
+    # --hostname from every pipeline request against a self-hosted instance.
+    local -a hf=()
+    [[ -n ${GITLAB_HOSTNAME:-} ]] && hf=(--hostname "$GITLAB_HOSTNAME")
     : >"$tmp/pipeline-$id.active.pages"; : >"$tmp/pipeline-$id.completed.pages"; : >"$tmp/pipeline-$id.err"
     local status
     for status in created waiting_for_resource preparing pending running; do
-      if ! glab api "${hostflag[@]}" --paginate "projects/$id/pipelines?status=$status&per_page=100" >>"$tmp/pipeline-$id.active.pages" 2>>"$tmp/pipeline-$id.err"; then failed=true; fi
+      if ! glab api "${hf[@]}" --paginate "projects/$id/pipelines?status=$status&per_page=100" >>"$tmp/pipeline-$id.active.pages" 2>>"$tmp/pipeline-$id.err"; then failed=true; fi
     done
-    if ! glab api "${hostflag[@]}" --paginate "projects/$id/pipelines?status=failed&updated_after=$cutoff_iso&per_page=100" >"$tmp/pipeline-$id.completed.pages" 2>>"$tmp/pipeline-$id.err"; then failed=true; fi
+    if ! glab api "${hf[@]}" --paginate "projects/$id/pipelines?status=failed&updated_after=$cutoff_iso&per_page=100" >"$tmp/pipeline-$id.completed.pages" 2>>"$tmp/pipeline-$id.err"; then failed=true; fi
     jq -s --arg repo "$repo" '[.[][]?|{id,repository:$repo,name:(.name // .source // "Pipeline"),status:(.status // ""),event:(.source // ""),branch:(.ref // ""),url:(.web_url // ""),createdAt:(.created_at // ""),updatedAt:(.updated_at // "")}]|unique_by(.id)' "$tmp/pipeline-$id.active.pages" >"$tmp/pipeline-$id.active.json" 2>/dev/null || printf '[]\n' >"$tmp/pipeline-$id.active.json"
     jq -s --arg repo "$repo" '[.[][]?|{id,repository:$repo,name:(.name // .source // "Pipeline"),status:(.status // ""),event:(.source // ""),branch:(.ref // ""),url:(.web_url // ""),createdAt:(.created_at // ""),updatedAt:(.updated_at // "")}]|unique_by(.id)' "$tmp/pipeline-$id.completed.pages" >"$tmp/pipeline-$id.completed.json" 2>/dev/null || printf '[]\n' >"$tmp/pipeline-$id.completed.json"
     if [[ $failed == true ]]; then api_error "pipelines $repo" "$tmp/pipeline-$id.err"; fi
   }
-  export tmp warnings cutoff_iso hostflag
+  export tmp warnings cutoff_iso GITLAB_HOSTNAME="$hostname"
   export -f scan_one api_error error_detail
   xargs -r -P "$concurrency" -L1 bash -c 'scan_one "$1" "$2"' _ <"$tmp/scan-projects"
   jq -s 'add // []|unique_by(.id)|sort_by(.createdAt)|reverse' "$tmp"/pipeline-*.active.json >"$tmp/pipelines.json" 2>/dev/null || printf '[]\n' >"$tmp/pipelines.json"

@@ -61,7 +61,18 @@ Omarchy GitLab delegates authentication entirely to `glab`. It does not read, co
 
 ## Install
 
-Install directly from GitHub and enable the widget:
+`omarchy plugin add` clones a git URL's **default branch**; it has no flag to
+select a different one. While this GitLab port lives on the `gitlab-port`
+branch of a fork that still has the original GitHub plugin on `main`, install
+it from a local checkout of that branch instead of the bare GitHub URL:
+
+```bash
+git clone --branch gitlab-port https://github.com/pranavbabu/omarchy-github.git /tmp/omarchy-gitlab
+omarchy plugin add /tmp/omarchy-gitlab --enable
+```
+
+Once `gitlab-port` is merged to (or replaces) the repository's default
+branch, the direct form works and `omarchy plugin update` tracks it normally:
 
 ```bash
 omarchy plugin add https://github.com/pranavbabu/omarchy-github.git --enable
@@ -193,13 +204,18 @@ tests/panel-source-test.sh
 tests/service-source-test.sh
 ```
 
-Install that checkout for local iteration:
+Install that checkout for local iteration. `plugin add` clones from the
+checkout's git history, not its working tree, so commit before running it or
+the install will silently pick up whatever was last committed:
 
 ```bash
+git add -A && git commit -m "wip"   # plugin add clones HEAD, not uncommitted edits
 omarchy plugin add "$PWD" --enable
 ```
 
-The shell watches local plugin files, making QML iteration fast.
+After further edits, `omarchy plugin update <id> --yes` re-clones from the
+same local path and needs a new commit to have anything to pull. The shell
+then watches the installed copy's files, making QML iteration fast.
 
 ## How it works
 
@@ -225,6 +241,7 @@ A few things do not have a like-for-like GitLab equivalent:
 - **Bulk mark-as-read is safer, not identical.** GitHub's `/notifications` endpoint accepts a "mark everything read before this timestamp" call; GitLab's to-do API only marks individual to-dos or every to-do you have, with nothing in between. Marking all as read here submits the exact set of ids displayed on screen instead of a time boundary — a to-do that arrives mid-confirmation is never touched, which is strictly safer than the original's same-second edge case.
 - **No rate-limit footer.** GitHub's GraphQL API returns a `rateLimit` field on every request; self-hosted GitLab instances typically do not expose equivalent throttling headers, so the panel's rate-limit line stays hidden (the field is always `null`).
 - **Dashboard deep links are best-effort.** The "Open in GitLab" links use GitLab's documented `/dashboard/todos`, `/dashboard/merge_requests`, and `/dashboard/issues` paths with username query filters; very old GitLab versions may ignore a filter and show the unfiltered list instead.
+- **Icon glyphs use Nerd Fonts' current codepoints (≥ U+F0000), not the legacy Private Use Area ones (U+E000–U+F8FF) GitHub's Octocat used.** On this build, legacy-range codepoints were confirmed present in the font (correct outline, normal advance width, and they render fine through plain ImageMagick/FreeType) but did not paint through Omarchy's bar icon or panel row `Text` elements — while ≥ U+F0000 codepoints, used everywhere else in the original file, rendered correctly. The cause wasn't isolated further (it did not seem to be a layout, clipping, or Style.font-token issue); if you hit missing icons elsewhere, checking which Private Use Area range a codepoint falls in is a fast first move.
 
 ## License
 

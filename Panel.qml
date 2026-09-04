@@ -287,7 +287,7 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: ""
+    text: "󰮠"
     active: gitlab.alarming
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) gitlab.refresh()
@@ -412,7 +412,7 @@ Panel {
             }
             iconComponent: Component {
               Text {
-                text: ""
+                text: "󰮠"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.display
@@ -873,7 +873,7 @@ Panel {
       rowKind: "notification"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      glyph: modelData.type === "MergeRequest" ? "" : "󰍩"
+      glyph: modelData.type === "MergeRequest" ? "󰘭" : "󰍩"
       title: modelData.title
       detail: modelData.repository + " · " + modelData.reason + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
@@ -892,7 +892,7 @@ Panel {
       rowKind: "review"
       rowIndex: index
       rowId: String(modelData.id || modelData.url || index)
-      glyph: ""
+      glyph: "󰘭"
       title: modelData.title
       // Drafts only appear here when the setting is on, and the reason to turn
       // it on is knowing which requests are early feedback rather than a real
@@ -917,7 +917,7 @@ Panel {
       // A merge request with no configured pipeline reports no rollup at all,
       // which the plain merge request glyph conveys without implying a
       // pending run.
-      glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))
+      glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : "󰘭"))
       title: modelData.title
       detail: modelData.repository + " !" + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
