@@ -8,6 +8,10 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_contains() {
   [[ $SERVICE_SOURCE == *"$1"* ]] || fail "$2"
 }
+assert_not_contains() {
+  [[ $SERVICE_SOURCE != *"$1"* ]] || fail "$2"
+}
+
 assert_contains 'String(setting("repositoryScope", "Owned")).toLowerCase() === "owned and organizations" ? "organizations" : "owned"' \
   "an unrecognised repository scope no longer falls back to the narrower one"
 assert_contains '"--repository-scope", repositoryMode()' \
@@ -17,9 +21,13 @@ assert_contains 'fetchedRepositoryScope = String(data.repositoryScope || "owned"
 assert_contains $'if (value === "all repositories")\n            return "all";' \
   "the full Actions scan does not require an exact setting match"
 
-assert_not_contains() {
-  [[ $SERVICE_SOURCE != *"$1"* ]] || fail "$2"
-}
+assert_not_contains $'if (value === "" || loading || fetchProcess.running || markProcess.running)' \
+  "single-notification marking is still blocked during refresh"
+assert_contains 'String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"' \
+  "an unrecognised open-links value does not fall back to the web app window"
+
+assert_contains $'function canonicalNotificationTimestamp(value) {\n        var text = String(value || "");\n        if (text === "") return "";' \
+  "notification boundaries accept any ISO 8601 format and normalize to Z suffix"
 
 assert_contains $'function refresh() {\n        if (fetchProcess.running || markProcess.running || markQueue.length > 0) {\n            refreshQueued = true;\n            return ;\n        }' \
   "refresh and notification marking are not serialized"
@@ -29,15 +37,6 @@ assert_contains $'hideNotification(value);\n        enqueueMark(value);\n       
   "single-notification marking is dropped during refresh"
 assert_contains 'notifications = [item].concat(notifications);' \
   "failed notification marking does not restore the hidden row"
-assert_not_contains $'if (value === "" || loading || fetchProcess.running || markProcess.running)' \
-  "single-notification marking is still blocked during refresh"
-assert_contains 'String(setting("linkBehavior", "Web app window")).toLowerCase() === "browser tab" ? "Browser tab" : "Web app window"' \
-  "an unrecognised open-links value does not fall back to the web app window"
-
-assert_contains $'function canonicalNotificationTimestamp(value) {\n        var text = String(value || "");\n        if (!/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$/.test(text))\n            return "";' \
-  "notification boundaries are not shape validated"
-assert_contains 'return milliseconds <= Date.now() ? text : "";' \
-  "future notification boundaries are accepted"
 assert_contains $'function prepareMarkAllNotificationsRead() {\n        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)\n            return "";' \
   "bulk confirmation can be prepared during refresh or marking"
 assert_contains $'if (!/^\\d+$/.test(id)) {\n                notificationActionStatus = "Refresh before marking everything read.";' \

@@ -302,14 +302,22 @@ Item {
 
     function canonicalNotificationTimestamp(value) {
         var text = String(value || "");
-        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(text))
-            return "";
+        if (text === "") return "";
 
         var milliseconds = Date.parse(text);
-        if (!isFinite(milliseconds) || new Date(milliseconds).toISOString().replace(".000Z", "Z") !== text)
-            return "";
+        if (!isFinite(milliseconds)) return "";
 
-        return milliseconds <= Date.now() ? text : "";
+        if (milliseconds > Date.now()) return "";
+
+        var date = new Date(text);
+        var year = date.getUTCFullYear();
+        var month = String(date.getUTCMonth() + 1).padStart(2, "0");
+        var day = String(date.getUTCDate()).padStart(2, "0");
+        var hour = String(date.getUTCHours()).padStart(2, "0");
+        var minute = String(date.getUTCMinutes()).padStart(2, "0");
+        var second = String(date.getUTCSeconds()).padStart(2, "0");
+
+        return `${year}-${month}-${day}T${hour}:${minute}:${second}Z`;
     }
 
     // Capture the exact displayed boundary on the first click. The panel binds
@@ -333,7 +341,8 @@ Item {
 
         var boundaryIds = [];
         for (var j = 0; j < notifications.length; j++) {
-            if (String(notifications[j].updatedAt || "") !== boundary)
+            var normalizedUpdated = canonicalNotificationTimestamp(notifications[j].updatedAt);
+            if (normalizedUpdated === "" || normalizedUpdated !== boundary)
                 continue;
             var id = String(notifications[j].id || "");
             if (!/^\d+$/.test(id)) {
