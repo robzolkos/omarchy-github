@@ -22,7 +22,7 @@ assert_contains $'text: github.notificationActionStatus\n            textFormat:
   "notification action status is not forced to plain text"
 assert_contains $'return summary\n              }\n              textFormat: Text.PlainText' \
   "dashboard warning text is not forced to plain text"
-assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            actionEnabled: github.state === "ready" && !github.loading\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
+assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            actionEnabled: root.canMarkRead && github.state === "ready" && !github.loading\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
   "notification bulk action is not bound to the prepared displayed snapshot"
 assert_contains $'onActionBusyChanged: if (section.actionBusy) section.disarmAction()\n    onActionEnabledChanged: if (!section.actionEnabled) section.disarmAction()\n    onActionRevisionChanged: if (section.actionArmed) section.disarmAction()' \
   "bulk confirmation is not invalidated when notification state changes"
@@ -30,21 +30,27 @@ assert_contains $'var confirmed = section.preparedAction\n          section.disa
   "bulk action does not submit the originally prepared snapshot"
 assert_contains $'function activateCursor() {\n    if (!selectedTarget) return\n    openRow(selectedTarget.kind, selectedTarget.row.id, selectedTarget.row.url)' \
   "opening a notification from the keyboard does not mark it read"
-assert_contains $'function openRow(kind, id, url) {\n    var target = String(url || "")\n    var notificationId = String(id || "")\n    openUrl(target)\n    if (kind === "notification") github.markNotificationRead(notificationId)' \
-  "opening a notification marks it before launching the URL"
+assert_contains $'function openRow(kind, id, url) {\n    var target = String(url || "")\n    var notificationId = String(id || "")\n    if (kind === "notification") openNotification(notificationId, target)\n    else openUrl(target)' \
+  "opening a notification does not preserve open-then-mark behavior"
+assert_contains $'openNotificationCall = runtime.invoke("external.open-uri.https", "open", {' \
+  "notification activation is not bound to the fresh-gesture external-open operation"
+assert_contains $'if (opened && canMarkRead && notificationId !== "")\n          github.markNotificationRead(notificationId)' \
+  "notification activation does not mark read only after a successful open"
 assert_contains $'function markSelectedRead() {\n    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))' \
   "keyboard notification marking is blocked during refresh"
 assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationId || linkRow.rowId, linkRow.url)' \
   "clicking a notification does not open and mark it read"
-assert_contains $'if (github.linkBehavior === "Browser tab") Util.execArgv(["xdg-open", value])\n    else Quickshell.execDetached(["omarchy-launch-webapp", value])' \
-  "the open-links setting does not choose between the browser and the web app window"
+assert_contains $'runtime.invoke("external.open-uri.https", "open", {\n      url:' \
+  "links do not cross the broker boundary"
+assert_contains $'presentation: github.linkBehavior === "Browser tab" ? "browser-tab" : "web-app-window"\n    })\n    close()' \
+  "link activation no longer records its required post-effect self-dismiss"
 
 # updateEntryInline rewrites the shell.json entry whole, so a persist that does
 # not carry the current settings forward silently drops every other setting.
 assert_contains $'var entry = { id: root.moduleName }\n    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]' \
   "persisting a setting does not merge the entry from the current settings"
-assert_contains 'root.bar.shell.updateEntryInline(root.moduleName, entry)' \
-  "settings changes are not written back to shell.json"
+assert_contains 'runtime.updateSettings(entry)' \
+  "settings changes are not written through the host settings projection"
 # Dropdown writes `value` imperatively on selection, which destroys a plain
 # inline binding the first time a row is picked.
 assert_contains $'Binding on value { value: github.linkBehavior }' \
@@ -71,9 +77,9 @@ assert_contains $'onPreviousPage: root.notificationsPage = Math.max(0, root.noti
   "notification page controls do not clamp their range"
 assert_contains $'model: root.notificationRows()\n            showExpansionControl: false\n            footerButtonsBordered: true\n            page: root.notificationsPage' \
   "notification pagination still shows an inactive expansion control"
-assert_contains $'showReadAction: true\n      showTrailingIndicator: false\n      notificationId: String(modelData.id || "")' \
+assert_contains $'showReadAction: root.canMarkRead\n      showTrailingIndicator: false\n      notificationId: String(modelData.id || "")' \
   "notification rows retain an open-link indicator beside their read action"
-assert_contains $'title: "ASSIGNED ISSUES"\n            count: github.assignedIssues.length\n            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)\n            expanded: root.issuesExpanded\n            footerButtonsBordered: true\n            openUrl: "https://github.com/issues/assigned"' \
+assert_contains $'title: "ASSIGNED ISSUES"\n            count: github.assignedIssues.length\n            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)\n            expanded: root.issuesExpanded\n            footerButtonsBordered: true\n            openUrl: github.navigationHandles.assignedIssues || ""' \
   "assigned-issues open control does not retain its matching border"
 assert_contains 'readonly property bool showAction: section.count > 0 && section.actionText !== ""' \
   "bulk notification action disappears while data is loading"

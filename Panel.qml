@@ -1,16 +1,12 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import Quickshell
-import Quickshell.Io
-import qs.Commons
-import qs.Ui
+import Omarchy.PluginPresentation 1.0
 
 Panel {
   id: root
   moduleName: "robzolkos.github"
-  ipcTarget: "robzolkos.github"
-  manageIpc: false
+  surfaceTarget: "github"
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -27,6 +23,9 @@ Panel {
   property bool issuesExpanded: false
   property bool actionsExpanded: false
   property bool failuresExpanded: false
+  readonly property bool canOpenLinks: runtime.hasPermission("external.open-uri.https", "open")
+  readonly property bool canMarkRead: runtime.hasPermission("bash.execute", "run")
+  property var openNotificationCall: null
   // settingsOpen is the page on screen; pendingSettingsOpen is the page the
   // in-flight flip will land on, since the swap happens edge-on at 90 degrees.
   property bool settingsOpen: false
@@ -114,13 +113,13 @@ Panel {
     if (!selectedTarget) return
     openRow(selectedTarget.kind, selectedTarget.row.id, selectedTarget.row.url)
   }
-  // Snapshot id/url before marking. hideNotification destroys the row, and
-  // reading linkRow.url after that leaves openUrl with an empty target.
+  // Snapshot the URL before the row model can refresh. The trusted opener
+  // independently revalidates its normalized origin against the grant.
   function openRow(kind, id, url) {
     var target = String(url || "")
     var notificationId = String(id || "")
-    openUrl(target)
-    if (kind === "notification") github.markNotificationRead(notificationId)
+    if (kind === "notification") openNotification(notificationId, target)
+    else openUrl(target)
   }
   function markSelectedRead() {
     if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))
@@ -176,10 +175,34 @@ Panel {
 
   function openUrl(url) {
     var value = String(url || "")
-    if (value === "") return
-    // Let the default URL handler route browser tabs to the intended workspace.
-    if (github.linkBehavior === "Browser tab") Util.execArgv(["xdg-open", value])
-    else Quickshell.execDetached(["omarchy-launch-webapp", value])
+    if (value === "" || !canOpenLinks) return
+    runtime.invoke("external.open-uri.https", "open", {
+      url: value,
+      presentation: github.linkBehavior === "Browser tab" ? "browser-tab" : "web-app-window"
+    })
+    close()
+  }
+
+  function openNotification(id, handle) {
+    var resource = String(handle || "")
+    if (resource === "" || !canOpenLinks) return
+    openNotificationCall = runtime.invoke("external.open-uri.https", "open", {
+      url: resource,
+      presentation: github.linkBehavior === "Browser tab" ? "browser-tab" : "web-app-window"
+    })
+    if (openNotificationCall) {
+      var finished = function() {
+        if (!openNotificationCall.finished) return
+        try { openNotificationCall.finishedChanged.disconnect(finished) } catch (_) {}
+        var opened = false
+        try { opened = openNotificationCall.ok && JSON.parse(String(openNotificationCall.utf8Text || "{}")).ok === true } catch (_) {}
+        var notificationId = String(id || "")
+        if (opened && canMarkRead && notificationId !== "")
+          github.markNotificationRead(notificationId)
+      }
+      if (openNotificationCall.finished) finished()
+      else openNotificationCall.finishedChanged.connect(finished)
+    }
     close()
   }
 
@@ -195,8 +218,7 @@ Panel {
       else entry[key] = values[key]
     }
     root.settings = entry
-    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
-      root.bar.shell.updateEntryInline(root.moduleName, entry)
+    runtime.updateSettings(entry)
   }
 
   function showSettings(open) {
@@ -245,9 +267,6 @@ Panel {
     return Math.floor(seconds / 2592000) + "mo ago"
   }
 
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
-
   onOpenedChanged: {
     // A pending confirmation must never survive the panel closing, or the next
     // open would run a destructive action on a single click.
@@ -271,32 +290,9 @@ Panel {
 
   Service { id: github; settings: root.settings }
 
-  IpcHandler {
-    target: root.ipcTarget
-    function open(): void { root.open() }
-    function close(): void { root.close() }
-    function show(): void { root.open() }
-    function hide(): void { root.close() }
-    function toggle(): void { root.toggle() }
-    function refresh(): string { github.refresh(); return "ok" }
-    function status(): string { return github.state }
-  }
-
-  BarIconButton {
-    id: button
-    anchors.fill: parent
-    bar: root.bar
-    text: ""
-    active: github.alarming
-    onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton || buttonCode === Qt.MiddleButton) github.refresh()
-      else root.toggle()
-    }
-  }
-
   KeyboardPanel {
     id: panel
-    anchorItem: button
+    anchorItem: root
     owner: root
     bar: root.bar
     open: root.opened
@@ -471,13 +467,13 @@ Panel {
             footerButtonsBordered: true
             page: root.notificationsPage
             pageCount: root.notificationPageCount()
-            openUrl: "https://github.com/notifications"
+            openUrl: github.navigationHandles.notifications || ""
             onPreviousPage: root.notificationsPage = Math.max(0, root.notificationsPage - 1)
             onNextPage: root.notificationsPage = Math.min(root.notificationPageCount() - 1, root.notificationsPage + 1)
             delegateComponent: notificationDelegate
             actionText: "Mark all read"
             actionBusyText: "Marking…"
-            actionEnabled: github.state === "ready" && !github.loading
+            actionEnabled: root.canMarkRead && github.state === "ready" && !github.loading
             actionBusy: github.marking
             actionRevision: github.notificationsRevision
             actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }
@@ -490,7 +486,7 @@ Panel {
             count: github.reviewRequests.length
             model: root.sectionRows(github.reviewRequests, root.reviewsExpanded)
             expanded: root.reviewsExpanded
-            openUrl: "https://github.com/pulls/review-requested"
+            openUrl: github.navigationHandles.reviewRequests || ""
             onToggleExpanded: root.reviewsExpanded = !root.reviewsExpanded
             delegateComponent: reviewDelegate
           }
@@ -504,7 +500,7 @@ Panel {
             count: Math.max(github.myPullRequestsTotal, github.myPullRequests.length)
             model: root.sectionRows(github.myPullRequests, root.myPullsExpanded)
             expanded: root.myPullsExpanded
-            openUrl: "https://github.com/pulls"
+            openUrl: github.navigationHandles.pullRequests || ""
             onToggleExpanded: root.myPullsExpanded = !root.myPullsExpanded
             delegateComponent: myPullRequestDelegate
           }
@@ -516,7 +512,7 @@ Panel {
             model: root.sectionRows(github.assignedIssues, root.issuesExpanded)
             expanded: root.issuesExpanded
             footerButtonsBordered: true
-            openUrl: "https://github.com/issues/assigned"
+            openUrl: github.navigationHandles.assignedIssues || ""
             onToggleExpanded: root.issuesExpanded = !root.issuesExpanded
             delegateComponent: issueDelegate
           }
@@ -876,7 +872,7 @@ Panel {
       title: modelData.title
       detail: modelData.repository + " · " + modelData.reason + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
-      showReadAction: true
+      showReadAction: root.canMarkRead
       showTrailingIndicator: false
       notificationId: String(modelData.id || "")
     }

@@ -1,5 +1,7 @@
 # Omarchy GitHub
 
+> Experimental schema-v2 migration for [Omarchy PR #8956](https://github.com/omacom/omarchy/pull/8956), not a schema-v1 installation update. Requires the opt-in runtime and explicit host-extension consent for the manifest's `/usr/bin/gh` commands and credential-home access. The existing screenshots describe the original plugin, not new verification of this branch.
+
 Your GitHub work, directly in the Omarchy bar.
 
 **Omarchy GitHub** turns the Octocat in your bar into a fast, keyboard-friendly command center for everything that needs your attention—without keeping another browser tab open.
@@ -37,8 +39,7 @@ Repository search, metric filters, and sorting make even large GitHub accounts m
 ## Requirements
 
 - Omarchy Quattro with shell plugin support
-- [`gh`](https://cli.github.com/) on `PATH`
-- [`jq`](https://jqlang.github.io/jq/)
+- [`gh`](https://cli.github.com/) installed at `/usr/bin/gh`
 - A Nerd Font; Omarchy includes one by default
 
 Authenticate GitHub CLI before installing:
@@ -54,7 +55,7 @@ The `notifications` scope is required to read notifications and mark threads rea
 gh auth refresh -h github.com -s notifications -s repo
 ```
 
-Omarchy GitHub delegates authentication entirely to `gh`. It does not read, copy, log, or persist your GitHub token.
+Omarchy GitHub delegates authentication entirely to the system `gh`. The secure runtime launches that existing executable with a reviewed GitHub-dashboard argument profile; the plugin does not bundle another copy, invoke a shell, or read, copy, log, or persist your GitHub token.
 
 ## Install
 
@@ -113,7 +114,7 @@ omarchy plugin remove robzolkos.github
 | `Escape` in search | Clear search and return to row navigation |
 | `Escape` elsewhere | Close the panel |
 
-Rows open through `omarchy-launch-webapp` by default, so GitHub gets a dedicated app window rather than a tab in an already-crowded browser. That helper targets Chromium-based default browsers and falls back to `chromium.desktop`; if you have no Chromium-based browser, switch **Open links** to **Browser tab** and rows open through `xdg-open` using your default URL handler instead. This also lets a workspace-aware browser launcher choose the destination without a separate focus command switching workspaces first.
+Rows request a dedicated Chromium app window by default. Switch **Open links** to **Browser tab** to use the desktop's normal HTTPS handler instead. Both paths cross the secure runtime's desktop opener, which accepts only `https://github.com` URLs from a fresh user gesture and revalidates the origin outside the plugin sandbox.
 
 Activity sections show five items initially and expand to a bounded list of 25. **Open in GitHub** takes you to the corresponding complete GitHub view where one is available.
 
@@ -183,6 +184,8 @@ omarchy plugin validate .
 tests/helper-test.sh
 tests/panel-source-test.sh
 tests/service-source-test.sh
+tests/secure-model-test.sh
+tests/github-api-source-test.sh
 ```
 
 Install that checkout for local iteration:
@@ -195,7 +198,7 @@ The shell watches local plugin files, making QML iteration fast.
 
 ## How it works
 
-`Service.qml` schedules an executable helper, `omarchy-github-fetch`, which calls GitHub exclusively through `gh api` and processes responses with `jq`.
+`Service.qml` schedules authority-free orchestration in `GitHubApi.qml`. Each operation calls the secure runtime's structured command bridge, which launches the system `/usr/bin/gh` outside the sandbox only when the plugin has the required `bash.execute` grant and the complete argument vector matches this manifest's explicitly approved dashboard grammar. The manifest declares credential-home access and a fixed environment; invocation cannot replace either. The plugin receives bounded command output, not ambient process authority.
 
 - GraphQL retrieves every repository in the configured scope and exact aggregate counts.
 - REST retrieves notifications and workflow runs.
@@ -205,11 +208,7 @@ The shell watches local plugin files, making QML iteration fast.
 - Completed runs are server-bounded to the configured failure window.
 - Independent requests allow successful sections to remain available when one endpoint fails.
 
-Run the helper directly to inspect its JSON output:
-
-```bash
-./omarchy-github-fetch --action-scan recent --action-repo-limit 15 | jq
-```
+The pre-secure `omarchy-github-fetch` helper remains unchanged in the repository for upstream comparison, but the secure runtime path does not execute it.
 
 ## License
 

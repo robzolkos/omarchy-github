@@ -33,3 +33,6 @@ jobs:
 
       - name: Run service source tests
         run: tests/service-source-test.sh
+
+      - name: Run secure runtime boundary tests
+        run: tests/secure-model-test.sh && tests/github-api-source-test.sh

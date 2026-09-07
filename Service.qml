@@ -1,8 +1,7 @@
 import QtQuick
-import Quickshell
-import Quickshell.Io
+import Omarchy.PluginPresentation 1.0
 
-// GitHub dashboard data service. The helper owns API pagination and aggregation;
+// GitHub dashboard data service. GitHubApi owns authority-free API orchestration;
 // this item schedules it and exposes one stable, defensive model to the panel.
 Item {
     id: root
@@ -24,26 +23,24 @@ Item {
     property var actions: []
     property var failedActions: []
     property var repositories: []
+    property var navigationHandles: ({})
     property var warnings: []
     property var rateLimit: null
-    property string _stdout: ""
-    property string _stderr: ""
     property bool refreshQueued: false
     property string markingNotificationId: ""
     property bool markingAllNotifications: false
     property var markingAllNotificationIds: []
     property string notificationActionStatus: ""
-    property string _markStdout: ""
-    property string _markStderr: ""
     // Thread IDs waiting for PATCH after GitHub confirmed them locally. An
     // in-flight refresh must not restore these rows, or the bar stays lit until
     // the next poll even though the user already opened or marked the thread.
     property var hiddenNotifications: ({})
     property var markQueue: []
-    // Single-thread and bulk marking share one process, so the panel gates every
+    // Single-thread and bulk marking share one serialized path, so the panel gates every
     // entry point on this rather than on whichever flag a given call happens to
     // set. A caller added later inherits the guard instead of having to know.
-    readonly property bool marking: markProcess.running
+    readonly property bool marking: markingNotificationId !== "" || markingAllNotifications
+    readonly property bool canMarkRead: runtime.hasPermission("bash.execute", "run")
     readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 900, 60, 3600)
     readonly property int unreadCount: notifications.length
     readonly property int actionCount: actions.length
@@ -112,12 +109,19 @@ Item {
         return "recent";
     }
 
-    function helperPath() {
-        return decodeURIComponent(Qt.resolvedUrl("omarchy-github-fetch").toString().replace(/^file:\/\//, ""));
-    }
-
-    function command() {
-        return [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+    function refreshOptions() {
+        return {
+            includeArchived: boolSetting("includeArchived", false),
+            includeForks: boolSetting("includeForks", false),
+            repositoryScope: repositoryMode(),
+            includeArchivedReviews: boolSetting("includeArchivedReviewRequests", false),
+            includeDraftReviews: boolSetting("includeDraftReviewRequests", false),
+            actionScan: actionMode(),
+            actionRepoLimit: intSetting("actionScanRepoLimit", 15, 5, 200),
+            actionConcurrency: intSetting("actionScanConcurrency", 6, 1, 12),
+            failedDays: intSetting("failedActionDays", 7, 1, 30),
+            failedLimit: intSetting("failedActionLimit", 20, 1, 100)
+        };
     }
 
     function copyMap(value) {
@@ -230,7 +234,7 @@ Item {
     }
 
     function startQueuedMark() {
-        if (fetchProcess.running || markProcess.running || markQueue.length === 0)
+        if (loading || marking || markQueue.length === 0)
             return false;
 
         var value = String(markQueue[0] || "");
@@ -241,29 +245,38 @@ Item {
         actionStatusTimer.stop();
         markingNotificationId = value;
         notificationActionStatus = "Marking notification read…";
-        _markStdout = "";
-        _markStderr = "";
-        markProcess.command = [helperPath(), "--mark-notification-read", value];
-        markProcess.running = true;
+        githubApi.markNotification(value, function(ok, resultMessage) {
+            root.finishMark(ok, resultMessage);
+        });
         return true;
     }
 
     function refresh() {
-        if (fetchProcess.running || markProcess.running || markQueue.length > 0) {
+        if (loading || marking || markQueue.length > 0) {
             refreshQueued = true;
             return ;
         }
         refreshQueued = false;
         loading = true;
-        _stdout = "";
-        _stderr = "";
-        fetchProcess.command = command();
-        fetchProcess.running = true;
+        if (!githubApi.refresh(refreshOptions(), function(data) {
+            root.loading = false;
+            root.apply(data);
+            if (root.startQueuedMark())
+                return;
+            if (root.refreshQueued) {
+                root.refreshQueued = false;
+                Qt.callLater(root.refresh);
+            }
+        })) {
+            loading = false;
+            state = "error";
+            message = "A GitHub refresh is already running.";
+        }
     }
 
     function apply(raw) {
         try {
-            var data = JSON.parse(String(raw || ""));
+            var data = typeof raw === "string" ? JSON.parse(String(raw || "")) : (raw || {});
             state = String(data.state || "error");
             message = String(data.message || "");
             login = String(data.login || "");
@@ -278,6 +291,7 @@ Item {
             actions = Array.isArray(data.actions) ? data.actions : [];
             failedActions = Array.isArray(data.failedActions) ? data.failedActions : [];
             repositories = Array.isArray(data.repositories) ? data.repositories : [];
+            navigationHandles = data.navigationHandles && typeof data.navigationHandles === "object" ? data.navigationHandles : ({});
             warnings = Array.isArray(data.warnings) ? data.warnings : [];
             rateLimit = data.rateLimit || null;
         } catch (error) {
@@ -289,7 +303,7 @@ Item {
 
     function markNotificationRead(id) {
         var value = String(id || "");
-        if (value === "")
+        if (value === "" || !canMarkRead)
             return ;
 
         // Drop the row before GitHub round-trips. Opening a thread while a
@@ -316,7 +330,7 @@ Item {
     // confirmation to notificationsRevision, so any refresh invalidates this
     // prepared value before the destructive second click can run.
     function prepareMarkAllNotificationsRead() {
-        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)
+        if (!canMarkRead || notifications.length === 0 || loading || marking)
             return "";
 
         var boundary = "";
@@ -348,7 +362,7 @@ Item {
 
     function markAllNotificationsRead(prepared) {
         var confirmed = String(prepared || "");
-        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)
+        if (confirmed === "" || loading || marking)
             return ;
 
         // Recompute immediately before starting. This protects non-panel callers
@@ -372,13 +386,35 @@ Item {
         markingAllNotifications = true;
         markingAllNotificationIds = hideAllNotifications();
         notificationActionStatus = "Marking all notifications read…";
-        _markStdout = "";
-        _markStderr = "";
-        var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];
-        for (var i = 0; i < snapshot.boundaryIds.length; i++)
-            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));
-        markProcess.command = commandLine;
-        markProcess.running = true;
+        githubApi.markAll(String(snapshot.boundary || ""), snapshot.boundaryIds, function(ok, resultMessage) {
+            root.finishMark(ok, resultMessage);
+        });
+    }
+
+    function finishMark(ok, resultMessage) {
+        var all = markingAllNotifications;
+        var markedId = markingNotificationId;
+        if (ok) {
+            notificationActionStatus = all ? "Notifications marked read. Refreshing…" : "Notification marked read. Refreshing…";
+        } else {
+            var fallback = all ? "Could not mark all notifications read." : "Could not mark notification read.";
+            notificationActionStatus = String(resultMessage || fallback);
+            if (all)
+                restoreHiddenNotifications(markingAllNotificationIds);
+            else if (markedId !== "")
+                restoreHiddenNotification(markedId);
+        }
+        markingNotificationId = "";
+        markingAllNotifications = false;
+        markingAllNotificationIds = [];
+        actionStatusTimer.restart();
+        if (startQueuedMark())
+            return;
+
+        // GitHub is authoritative after every attempt. This reconciles
+        // successful, failed, and partially completed bulk operations.
+        refreshQueued = false;
+        Qt.callLater(refresh);
     }
 
     visible: false
@@ -399,96 +435,8 @@ Item {
         onTriggered: root.notificationActionStatus = ""
     }
 
-    Process {
-        id: fetchProcess
-
-        running: false
-        command: []
-        onExited: function(exitCode) {
-            root.loading = false;
-            var stdout = String(output.text || root._stdout || "");
-            var stderr = String(errors.text || root._stderr || "").trim();
-            if (stdout.trim() !== "") {
-                root.apply(stdout);
-            } else {
-                root.state = "error";
-                root.message = stderr !== "" ? stderr : "GitHub data refresh failed.";
-            }
-            if (root.startQueuedMark())
-                return ;
-
-            if (root.refreshQueued) {
-                root.refreshQueued = false;
-                Qt.callLater(root.refresh);
-            }
-        }
-
-        stdout: StdioCollector {
-            id: output
-
-            waitForEnd: true
-            onStreamFinished: root._stdout = text
-        }
-
-        stderr: StdioCollector {
-            id: errors
-
-            waitForEnd: true
-            onStreamFinished: root._stderr = text
-        }
-
-    }
-
-    Process {
-        id: markProcess
-
-        running: false
-        command: []
-        onExited: function(exitCode) {
-            var response = null;
-            try {
-                response = JSON.parse(String(markOutput.text || root._markStdout || ""));
-            } catch (error) {
-            }
-            var all = root.markingAllNotifications;
-            var markedId = root.markingNotificationId;
-            if (exitCode === 0 && response && response.state === "ready") {
-                root.notificationActionStatus = all ? "Notifications marked read. Refreshing…" : "Notification marked read. Refreshing…";
-            } else {
-                var fallback = all ? "Could not mark all notifications read." : "Could not mark notification read.";
-                root.notificationActionStatus = response && response.message ? String(response.message) : String(markErrors.text || root._markStderr || fallback).trim();
-                if (all)
-                    root.restoreHiddenNotifications(root.markingAllNotificationIds);
-                else if (markedId !== "")
-                    root.restoreHiddenNotification(markedId);
-            }
-            root.markingNotificationId = "";
-            root.markingAllNotifications = false;
-            root.markingAllNotificationIds = [];
-            actionStatusTimer.restart();
-            if (root.startQueuedMark())
-                return ;
-
-            // GitHub is authoritative after every attempt. This reconciles
-            // successful, failed, and partially completed bulk operations.
-            root.refreshQueued = false;
-            Qt.callLater(root.refresh);
-        }
-
-        stdout: StdioCollector {
-            id: markOutput
-
-            waitForEnd: true
-            onStreamFinished: root._markStdout = text
-        }
-
-        stderr: StdioCollector {
-            id: markErrors
-
-            waitForEnd: true
-            onStreamFinished: root._markStderr = text
-        }
-
+    GitHubApi {
+        id: githubApi
     }
 
 }

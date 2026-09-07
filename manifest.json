@@ -1,23 +1,21 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "robzolkos.github",
   "name": "GitHub",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "Rob Zolkos",
   "license": "MIT",
   "description": "A keyboard-friendly GitHub inbox for notifications, reviews, your own pull requests, assigned issues, Actions, and repositories.",
-  "kinds": ["bar-widget"],
-  "activation": "on-demand",
-  "entryPoints": {
-    "barWidget": "Panel.qml"
+  "runtime": {
+    "apiVersion": 1,
+    "qml": "Panel.qml",
+    "surfaceQml": {"github": "Panel.qml", "barWidget": "BarWidget.qml"}
   },
-  "barWidget": {
-    "displayName": "GitHub",
-    "description": "Act on unread notifications and browse review requests, your authored pull requests with their check state, assigned issues, active or failed workflows, and repository metrics.",
-    "category": "Development",
-    "aliases": ["github", "octocat", "repos", "actions"],
-    "allowMultiple": false,
-    "defaultSection": "right",
+  "surfaces": {
+    "github": {"role": "panel", "maximumWidth": 760, "maximumHeight": 780, "maximumFramesPerSecond": 30, "keyboardFocus": "after-gesture"},
+    "barWidget": {"role": "bar-embedded", "maximumWidth": 96, "maximumHeight": 64, "maximumFramesPerSecond": 30, "defaultSection": "right"}
+  },
+  "settings": {
     "defaults": {
       "refreshIntervalSec": 900,
       "linkBehavior": "Web app window",
@@ -49,6 +47,14 @@
       { "key": "failedActionDays", "type": "integer", "label": "Failed Actions window (days)", "min": 1, "max": 30, "step": 1, "defaultValue": 7 },
       { "key": "failedActionLimit", "type": "integer", "label": "Maximum failed Actions", "min": 1, "max": 100, "step": 5, "defaultValue": 20 },
       { "key": "iconAlwaysUnlit", "type": "boolean", "label": "Keep the bar icon unlit", "defaultValue": false, "description": "Keep the bar icon unlit regardless of unread notifications, active actions, review requests, or failing PR checks. Counts and rows still populate the panel as usual." }
+    ]
+  },
+  "permissions": {
+    "required": [
+      {"capability":"bash.execute","definitionGeneration":1,"definitionDigest":"f1c859d56ceb814a21c0ab7e58087b18f4f86baeb620fdc161f9336445a272b6","operations":["run"],"commands":[{"command":"gh","executable":"/usr/bin/gh","timeoutMs":20000,"stdoutBytes":49152,"stderrBytes":4096,"accountHome":true,"environment":{"GH_HOST":"github.com","GH_PAGER":"cat","GH_PROMPT_DISABLED":"1","GOMAXPROCS":"2","NO_COLOR":"1","PAGER":"cat"},"rules":[[{"exact":"auth"},{"exact":"status"},{"exact":"--hostname"},{"exact":"github.com"}],[{"exact":"api"},{"exact":"-H"},{"exact":"Accept: application/vnd.github+json"},{"regex":"/notifications\\?all=false&participating=false&per_page=10&page=[1-9][0-9]{0,2}"}],[{"exact":"api"},{"exact":"-H"},{"exact":"Accept: application/vnd.github+json"},{"regex":"/search/issues\\?q=is%3Aopen\\+is%3Apr\\+review-requested%3A%40me(?:\\+draft%3Afalse)?(?:\\+archived%3Afalse)?&per_page=10&page=[1-9][0-9]{0,2}"}],[{"exact":"api"},{"exact":"-H"},{"exact":"Accept: application/vnd.github+json"},{"regex":"/search/issues\\?q=is%3Aopen\\+is%3Aissue\\+assignee%3A%40me(?:\\+archived%3Afalse)?&per_page=10&page=[1-9][0-9]{0,2}"}],[{"exact":"api"},{"exact":"-H"},{"exact":"Accept: application/vnd.github+json"},{"regex":"/repos/[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}/actions/runs\\?status=(?:in_progress|queued|waiting|requested|pending)&per_page=10&page=[1-9][0-9]{0,2}"}],[{"exact":"api"},{"exact":"-H"},{"exact":"Accept: application/vnd.github+json"},{"regex":"/repos/[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}/actions/runs\\?status=completed&created=%3E%3D[0-9]{4}-[0-9]{2}-[0-9]{2}&per_page=10&page=[1-9][0-9]{0,2}"}],[{"exact":"api"},{"exact":"--method"},{"exact":"PATCH"},{"regex":"/notifications/threads/[0-9]{1,32}"}],[{"exact":"api"},{"exact":"--method"},{"exact":"PUT"},{"exact":"/notifications"},{"exact":"-f"},{"regex":"last_read_at=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z"}],[{"exact":"api"},{"exact":"graphql"},{"exact":"-f"},{"exact":"query=query($search:String!) { search(query:$search,type:ISSUE,first:50) { issueCount nodes { ... on PullRequest { number title url updatedAt isDraft repository { nameWithOwner } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } } }"},{"exact":"-F"},{"regex":"search=is:open is:pr author:@me sort:updated-desc(?: archived:false)?"}],[{"exact":"api"},{"exact":"graphql"},{"exact":"-f"},{"regex":"query=query\\(\\$cursor:String\\) \\{ viewer \\{ login repositories\\(first:100,after:\\$cursor,ownerAffiliations:(?:OWNER|\\[OWNER,ORGANIZATION_MEMBER\\]),orderBy:\\{field:UPDATED_AT,direction:DESC\\}\\) \\{ nodes \\{ name nameWithOwner url isArchived isFork stargazerCount updatedAt issues\\(states:OPEN\\)\\{totalCount\\} pullRequests\\(states:OPEN\\)\\{totalCount\\} \\} pageInfo \\{ hasNextPage endCursor \\} \\} \\} rateLimit \\{ remaining resetAt cost \\} \\}"}],[{"exact":"api"},{"exact":"graphql"},{"exact":"-f"},{"regex":"query=query\\(\\$cursor:String\\) \\{ viewer \\{ login repositories\\(first:100,after:\\$cursor,ownerAffiliations:(?:OWNER|\\[OWNER,ORGANIZATION_MEMBER\\]),orderBy:\\{field:UPDATED_AT,direction:DESC\\}\\) \\{ nodes \\{ name nameWithOwner url isArchived isFork stargazerCount updatedAt issues\\(states:OPEN\\)\\{totalCount\\} pullRequests\\(states:OPEN\\)\\{totalCount\\} \\} pageInfo \\{ hasNextPage endCursor \\} \\} \\} rateLimit \\{ remaining resetAt cost \\} \\}"},{"exact":"-F"},{"regex":"cursor=[A-Za-z0-9_-]{1,256}"}]]}],"reason":"Run the installed GitHub CLI with the user-approved dashboard argv rules"}
+    ],
+    "optional": [
+      {"capability": "external.open-uri.https", "definitionGeneration": 1, "definitionDigest": "fcbb289bdcaf8223f3c122f6d2e4a6fc7f0fd1ce0ae7cbc57e5459b852c58844", "operations": ["open"], "origins": ["https://github.com"], "userGesture": true, "reason": "Open a selected GitHub item in the user's browser"}
     ]
   }
 }
