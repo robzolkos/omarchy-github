@@ -36,7 +36,7 @@ assert_contains $'function markSelectedRead() {\n    if (selectedTarget && selec
   "keyboard notification marking is blocked during refresh"
 assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationId || linkRow.rowId, linkRow.url)' \
   "clicking a notification does not open and mark it read"
-assert_contains $'if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])\n    else Quickshell.execDetached(["omarchy-launch-webapp", value])' \
+assert_contains $'if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["xdg-open", value])\n    else Quickshell.execDetached(["omarchy-launch-webapp", value])' \
   "the open-links setting does not choose between the browser and the web app window"
 
 # updateEntryInline rewrites the shell.json entry whole, so a persist that does

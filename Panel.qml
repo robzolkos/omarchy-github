@@ -177,9 +177,9 @@ Panel {
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
-    // omarchy-launch-webapp gives GitHub its own window; omarchy-launch-browser
-    // hands the URL to the default browser for those without a Chromium-based one.
-    if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["omarchy-launch-browser", value])
+    // Use the default URL handler without omarchy-launch-browser's separate
+    // focus command, which can change workspaces before the browser handles it.
+    if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["xdg-open", value])
     else Quickshell.execDetached(["omarchy-launch-webapp", value])
     close()
   }
