@@ -177,9 +177,8 @@ Panel {
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
-    // Use the default URL handler without omarchy-launch-browser's separate
-    // focus command, which can change workspaces before the browser handles it.
-    if (github.linkBehavior === "Browser tab") Quickshell.execDetached(["xdg-open", value])
+    // Let the default URL handler route browser tabs to the intended workspace.
+    if (github.linkBehavior === "Browser tab") Util.execArgv(["xdg-open", value])
     else Quickshell.execDetached(["omarchy-launch-webapp", value])
     close()
   }
