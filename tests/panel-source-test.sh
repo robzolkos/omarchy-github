@@ -22,8 +22,20 @@ assert_contains $'text: github.notificationActionStatus\n            textFormat:
   "notification action status is not forced to plain text"
 assert_contains $'return summary\n              }\n              textFormat: Text.PlainText' \
   "dashboard warning text is not forced to plain text"
-assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            actionEnabled: github.state === "ready" && !github.loading\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
+assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            // A ready snapshot is actionable even while a refresh runs. The\n            // two-click confirm still disarms if notificationsRevision changes.\n            actionEnabled: github.state === "ready"\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
   "notification bulk action is not bound to the prepared displayed snapshot"
+assert_not_contains 'Refreshing dashboard' \
+  "a ready summary is still replaced by Refreshing dashboard while a fetch runs"
+assert_contains $'meta: github.state === "ready" ?\n              github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"\n                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message' \
+  "the hero summary is still gated on loading rather than the last ready snapshot"
+assert_contains $'width: Style.space(22)\n                  height: Style.space(22)\n                  opacity: github.loading ? 1 : 0' \
+  "the refresh spinner still collapses and shifts the gear"
+assert_not_contains 'width: visible ? Style.space(22) : 0' \
+  "the refresh spinner still collapses and shifts the gear"
+assert_contains $'text: "󰑐"\n                    color: root.dim\n                    font.family: root.fontFamily\n                    font.pixelSize: Style.font.icon' \
+  "a fetch in flight does not show a spinner next to the gear"
+assert_contains $'text: "Updating from GitHub"' \
+  "the refresh spinner has no tooltip"
 assert_contains $'onActionBusyChanged: if (section.actionBusy) section.disarmAction()\n    onActionEnabledChanged: if (!section.actionEnabled) section.disarmAction()\n    onActionRevisionChanged: if (section.actionArmed) section.disarmAction()' \
   "bulk confirmation is not invalidated when notification state changes"
 assert_contains $'var confirmed = section.preparedAction\n          section.disarmAction()\n          section.actionTriggered(confirmed)' \

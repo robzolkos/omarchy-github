@@ -316,7 +316,7 @@ Item {
     // confirmation to notificationsRevision, so any refresh invalidates this
     // prepared value before the destructive second click can run.
     function prepareMarkAllNotificationsRead() {
-        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)
+        if (notifications.length === 0 || markProcess.running)
             return "";
 
         var boundary = "";
@@ -348,7 +348,7 @@ Item {
 
     function markAllNotificationsRead(prepared) {
         var confirmed = String(prepared || "");
-        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)
+        if (confirmed === "" || markProcess.running)
             return ;
 
         // Recompute immediately before starting. This protects non-panel callers

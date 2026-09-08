@@ -392,21 +392,64 @@ Panel {
             width: parent.width
             title: github.login !== "" ? "GitHub · " + github.login : "GitHub"
             // Mirrors every term of the alarming state, so the summary always
-            // explains why the bar icon is lit.
-            meta: github.loading ? "Refreshing dashboard…" : (github.state === "ready" ?
+            // explains why the bar icon is lit. A refresh must not replace this
+            // line; in-flight work is the spinner beside the gear.
+            meta: github.state === "ready" ?
               github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"
-                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message)
+                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message
             foreground: root.foreground
             fontFamily: root.fontFamily
             // The hero reserves the trailing space and centres the control
             // against the labels, so the gear needs no geometry of its own.
             trailingControl: Component {
-              PanelActionButton {
-                iconText: "󰒓"
-                tooltipText: "GitHub settings"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                onClicked: root.showSettings(true)
+              Row {
+                spacing: Style.space(4)
+
+                // Same 22px as the gear, kept while idle so a fetch cannot
+                // slide the settings button under the pointer.
+                Item {
+                  width: Style.space(22)
+                  height: Style.space(22)
+                  opacity: github.loading ? 1 : 0
+
+                  Text {
+                    anchors.centerIn: parent
+                    text: "󰑐"
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.icon
+                    transformOrigin: Item.Center
+
+                    RotationAnimation on rotation {
+                      from: 0
+                      to: 360
+                      duration: 900
+                      loops: Animation.Infinite
+                      running: github.loading
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: github.loading
+                    enabled: github.loading
+                    acceptedButtons: Qt.NoButton
+
+                    PanelToolTip {
+                      visible: parent.containsMouse
+                      text: "Updating from GitHub"
+                      fontFamily: root.fontFamily
+                    }
+                  }
+                }
+
+                PanelActionButton {
+                  iconText: "󰒓"
+                  tooltipText: "GitHub settings"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.showSettings(true)
+                }
               }
             }
             iconComponent: Component {
@@ -477,7 +520,9 @@ Panel {
             delegateComponent: notificationDelegate
             actionText: "Mark all read"
             actionBusyText: "Marking…"
-            actionEnabled: github.state === "ready" && !github.loading
+            // A ready snapshot is actionable even while a refresh runs. The
+            // two-click confirm still disarms if notificationsRevision changes.
+            actionEnabled: github.state === "ready"
             actionBusy: github.marking
             actionRevision: github.notificationsRevision
             actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }
