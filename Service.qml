@@ -117,7 +117,7 @@ Item {
     }
 
     function command() {
-        return [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+        return ["timeout", "--signal=TERM", "--kill-after=5s", "45s", helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
     }
 
     function copyMap(value) {
@@ -408,7 +408,10 @@ Item {
             root.loading = false;
             var stdout = String(output.text || root._stdout || "");
             var stderr = String(errors.text || root._stderr || "").trim();
-            if (stdout.trim() !== "") {
+            if (exitCode === 124) {
+                root.state = "error";
+                root.message = "GitHub refresh timed out after 45s.";
+            } else if (stdout.trim() !== "") {
                 root.apply(stdout);
             } else {
                 root.state = "error";

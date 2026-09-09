@@ -106,7 +106,11 @@ if [[ -n $mark_notification && -n $mark_all_before ]]; then
   exit 2
 fi
 command -v gh >/dev/null 2>&1 || { emit_state gh-not-installed "GitHub CLI is not installed or not on PATH."; exit 0; }
-gh auth status -h github.com >/dev/null 2>&1 || { emit_state logged-out "Sign in with gh auth login to load GitHub data."; exit 0; }
+gh_status=$(gh auth status -h github.com 2>&1) || { emit_state logged-out "Sign in with gh auth login to load GitHub data."; exit 0; }
+if [[ ! "$gh_status" =~ [Ss]copes:.*notifications ]]; then
+  emit_state missing-scope "GitHub token is missing the notifications scope. Run: gh auth refresh -h github.com -s notifications -s repo"
+  exit 0
+fi
 
 error_detail() {
   tr '\n' ' ' <"$1" |
