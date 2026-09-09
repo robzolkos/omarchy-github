@@ -768,14 +768,6 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
 
-              Text {
-                text: "GITHUB CONTRIBUTIONS"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-
               Toggle {
                 width: parent.width
                 label: "Show contribution calendar"
@@ -788,7 +780,7 @@ Panel {
               }
 
               Text {
-                text: "POSITION"
+                text: "Contributions Position"
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption

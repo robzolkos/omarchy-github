@@ -113,12 +113,14 @@ assert_contains 'width: gridWidth' \
   "contributions grid does not own its own width"
 assert_contains 'anchors.horizontalCenter: parent.horizontalCenter' \
   "contributions grid does not center inside the block"
-assert_contains $'text: "GITHUB CONTRIBUTIONS"' \
-  "contributions settings are not grouped under a heading"
+assert_not_contains $'text: "GITHUB CONTRIBUTIONS"' \
+  "old GITHUB CONTRIBUTIONS heading was not removed"
+assert_not_contains $'text: "POSITION"' \
+  "short POSITION label still present"
+assert_contains $'text: "Contributions Position"' \
+  "contributions position heading is missing or mislabelled"
 assert_contains $'label: "Show contribution calendar"' \
-  "include-contributions toggle is not in the contributions group"
-assert_contains $'text: "POSITION"' \
-  "contributions position setting is not under the contributions heading"
+  "include-contributions toggle is not in the contributions section"
 assert_contains $'options: root.contributionsPositionOptions' \
   "contributions position dropdown does not bind to its option list"
 assert_contains 'onClicked: root.persistSettings({ includeContributions: !github.includeContributions })' \
