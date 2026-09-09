@@ -30,6 +30,15 @@ Item {
     // by the helper into 5 levels (0..4) so the panel never re-counts.
     property var contributions: ({total: 0, days: []})
     readonly property bool includeContributions: boolSetting("includeContributions", true)
+    // Normalised the same way as linkBehavior: matched against the known
+    // options rather than substring-matched, so an unknown value falls back
+    // to the default position instead of silently snapping elsewhere.
+    readonly property string contributionsPosition: {
+        var value = String(setting("contributionsPosition", "Top")).toLowerCase()
+        if (value === "middle (above repositories)") return "Middle (above repositories)"
+        if (value === "bottom") return "Bottom"
+        return "Top"
+    }
     property string _stdout: ""
     property string _stderr: ""
     property bool refreshQueued: false

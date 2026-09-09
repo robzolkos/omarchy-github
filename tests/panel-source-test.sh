@@ -113,9 +113,25 @@ assert_contains 'width: gridWidth' \
   "contributions grid does not own its own width"
 assert_contains 'anchors.horizontalCenter: parent.horizontalCenter' \
   "contributions grid does not center inside the block"
-assert_contains $'Toggle {\n              width: parent.width\n              label: "Include contribution calendar"' \
-  "include-contributions toggle is not at the top of the settings page"
+assert_contains $'text: "GITHUB CONTRIBUTIONS"' \
+  "contributions settings are not grouped under a heading"
+assert_contains $'label: "Show contribution calendar"' \
+  "include-contributions toggle is not in the contributions group"
+assert_contains $'text: "POSITION"' \
+  "contributions position setting is not under the contributions heading"
+assert_contains $'options: root.contributionsPositionOptions' \
+  "contributions position dropdown does not bind to its option list"
 assert_contains 'onClicked: root.persistSettings({ includeContributions: !github.includeContributions })' \
   "include-contributions toggle does not persist its new value"
+assert_contains $'onChanged: function(value) { root.persistSettings({ contributionsPosition: value }) }' \
+  "contributions position dropdown does not persist its new value"
+# All three slots must guard visibility on the position string so a stale
+# render can't leave two blocks visible when the user switches position.
+assert_contains 'visible: github.includeContributions && github.contributionsPosition === "Top"' \
+  "top contributions slot does not gate on position === Top"
+assert_contains 'visible: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"' \
+  "middle contributions slot does not gate on the middle position"
+assert_contains 'visible: github.includeContributions && github.contributionsPosition === "Bottom"' \
+  "bottom contributions slot does not gate on position === Bottom"
 
 echo "panel source tests passed"

@@ -46,6 +46,11 @@ Panel {
     { value: "1800", label: "Every 30 minutes" },
     { value: "3600", label: "Every hour" }
   ]
+  readonly property var contributionsPositionOptions: [
+    { value: "Top", label: "Top" },
+    { value: "Middle (above repositories)", label: "Middle (above repositories)" },
+    { value: "Bottom", label: "Bottom" }
+  ]
   // Carry sub-notch wheel deltas between events. Touchpads emit many small
   // angleDeltas; mice often emit a fake 1–2px pixelDelta that would otherwise
   // crawl the dashboard a couple of pixels per click.
@@ -462,16 +467,14 @@ Panel {
             }
           }
 
+          // Three slots, one block per position. Only the slot selected by the user
+          // is visible, so the dashboard never renders the calendar twice when
+          // the position changes mid-session. Each binds the same data, so a
+          // refresh updates all three slots simultaneously.
           ContributionsBlock {
-            id: contributionsBlock
+            id: contributionsBlockTop
             width: parent.width
-            // The whole block hides when the user turns it off in settings, so
-            // they get back the same vertical real estate the dashboard had
-            // before this feature shipped.
-            visible: github.includeContributions
-            // Hide during the very first load: a heatmap that has not yet
-            // arrived reads as broken rather than empty, and the dashboard's
-            // loading summary in the hero already covers the wait.
+            visible: github.includeContributions && github.contributionsPosition === "Top"
             days: github.contributions.days
             total: github.contributions.total
             login: github.login
@@ -555,6 +558,15 @@ Panel {
             expanded: root.failuresExpanded
             onToggleExpanded: root.failuresExpanded = !root.failuresExpanded
             delegateComponent: failedActionDelegate
+          }
+
+          ContributionsBlock {
+            id: contributionsBlockMiddle
+            width: parent.width
+            visible: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"
+            days: github.contributions.days
+            total: github.contributions.total
+            login: github.login
           }
 
           PanelSeparator { foreground: root.foreground }
@@ -666,6 +678,15 @@ Panel {
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
           }
+
+          ContributionsBlock {
+            id: contributionsBlockBottom
+            width: parent.width
+            visible: github.includeContributions && github.contributionsPosition === "Bottom"
+            days: github.contributions.days
+            total: github.contributions.total
+            login: github.login
+          }
         }
       }
 
@@ -743,15 +764,50 @@ Panel {
             width: settingsFlick.width
             spacing: Style.space(20)
 
-            Toggle {
+            Column {
               width: parent.width
-              label: "Include contribution calendar"
-              description: "Show the year-long contribution heatmap at the top of the dashboard."
-              checked: github.includeContributions
-              foreground: root.foreground
-              accent: Color.accent
-              fontFamily: root.fontFamily
-              onClicked: root.persistSettings({ includeContributions: !github.includeContributions })
+              spacing: Style.space(8)
+
+              Text {
+                text: "GITHUB CONTRIBUTIONS"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Show contribution calendar"
+                description: "Render the year-long contribution heatmap in the dashboard."
+                checked: github.includeContributions
+                foreground: root.foreground
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onClicked: root.persistSettings({ includeContributions: !github.includeContributions })
+              }
+
+              Text {
+                text: "POSITION"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: contributionsPositionDropdown
+                width: parent.width
+                showLabel: false
+                options: root.contributionsPositionOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.persistSettings({ contributionsPosition: value }) }
+
+                Binding on value { value: github.contributionsPosition }
+              }
             }
 
             Column {

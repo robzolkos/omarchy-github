@@ -10,7 +10,7 @@ Your GitHub work, directly in the Omarchy bar.
 
 The dashboard is ordered by urgency so the most actionable work appears first:
 
-- **Contribution calendar** — your year on GitHub at a glance. The heatmap at the top of the panel shades from the theme foreground, with each cell showing the contribution count on hover. Turn it off in settings if you do not want it.
+- **Contribution calendar** — your year on GitHub at a glance. The heatmap shades from the theme foreground, with each cell showing the contribution count on hover. Turn it off in settings if you do not want it, and choose whether it sits at the top, between activity and repositories, or at the very bottom.
 - **Unread notifications** — open the related thread, mark it read in place, or clear the whole list
 - **Review requests** — see pull requests waiting on your review
 - **My pull requests** — track the pull requests you opened and the state of their checks
@@ -145,6 +145,7 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 | Include archived repositories | Off |
 | Include forks | Off |
 | Include contribution calendar | **On** |
+| Calendar position | **Top** |
 | Repository scope | **Owned** |
 | Include review requests and issues from archived repositories | Off |
 | Include review requests on drafts | Off |
