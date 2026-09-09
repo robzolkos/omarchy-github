@@ -177,6 +177,9 @@ Panel {
   function openUrl(url) {
     var value = String(url || "")
     if (value === "") return
+    // Only launch github.com. A compromised or odd payload should not open
+    // javascript: / file: / an arbitrary host from inside the shell.
+    if (!/^https:\/\/(www\.)?github\.com\//.test(value)) return
     // Let the default URL handler route browser tabs to the intended workspace.
     if (github.linkBehavior === "Browser tab") Util.execArgv(["xdg-open", value])
     else Quickshell.execDetached(["omarchy-launch-webapp", value])

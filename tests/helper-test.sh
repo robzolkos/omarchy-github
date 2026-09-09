@@ -41,7 +41,22 @@ assert_jq '.state == "logged-out" and (.repositories|length) == 0' "$out" "logge
 
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
-if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == auth ]]; then
+  echo "  - Token scopes: 'gist', 'read:org', 'repo', 'workflow'"
+  exit 0
+fi
+exit 1
+GH
+chmod +x "$sandbox/gh"
+out=$(PATH="$sandbox" "$HELPER")
+assert_jq '.state == "missing-scope"' "$out" "missing-notifications-scope state"
+
+cat >"$sandbox/gh" <<'GH'
+#!/usr/bin/env bash
+if [[ $1 == auth ]]; then
+  echo "  - Token scopes: 'gist', 'read:org', 'repo', 'workflow', 'notifications'"
+  exit 0
+fi
 if [[ $1 == api && $2 == --method && $3 == PATCH ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   id=${4##*/}
@@ -217,7 +232,10 @@ assert_jq '.state == "error"' "$fetch_setup_failed" "refresh setup failure repor
 # instead of the API's own explanation.
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
-if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == auth ]]; then
+  echo "  - Token scopes: 'gist', 'read:org', 'repo', 'workflow', 'notifications'"
+  exit 0
+fi
 if [[ $1 == api && $2 == graphql ]]; then
   cat <<'JSON'
 {"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":10,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
