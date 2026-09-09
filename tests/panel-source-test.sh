@@ -98,4 +98,24 @@ assert_contains 'github.fetchedRepositoryScope === "owned" ? "OWNED REPOSITORIES
 assert_contains '"No repositories loaded."' \
   "the repository empty state still claims a scope"
 
+# The contributions block derives its alpha ramp from the theme foreground so
+# the heatmap shades correctly under every theme. Anchoring on a hardcoded
+# palette would silently break light themes and the dim mode.
+assert_contains $'Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, shadeAlpha(level))' \
+  "contribution cells do not anchor their shading on the theme foreground"
+assert_contains $'ContributionsBlock {\n            id: contributionsBlock' \
+  "contributions block is not instantiated above the first section"
+assert_contains 'visible: github.includeContributions' \
+  "contributions block does not honour the includeContributions setting"
+assert_contains 'days: github.contributions.days' \
+  "contributions block does not bind to the helper output"
+assert_contains 'width: gridWidth' \
+  "contributions grid does not own its own width"
+assert_contains 'anchors.horizontalCenter: parent.horizontalCenter' \
+  "contributions grid does not center inside the block"
+assert_contains $'Toggle {\n              width: parent.width\n              label: "Include contribution calendar"' \
+  "include-contributions toggle is not at the top of the settings page"
+assert_contains 'onClicked: root.persistSettings({ includeContributions: !github.includeContributions })' \
+  "include-contributions toggle does not persist its new value"
+
 echo "panel source tests passed"

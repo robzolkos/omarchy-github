@@ -26,6 +26,10 @@ Item {
     property var repositories: []
     property var warnings: []
     property var rateLimit: null
+    // Year-long contribution calendar for the top-of-panel heatmap. Bucketed
+    // by the helper into 5 levels (0..4) so the panel never re-counts.
+    property var contributions: ({total: 0, days: []})
+    readonly property bool includeContributions: boolSetting("includeContributions", true)
     property string _stdout: ""
     property string _stderr: ""
     property bool refreshQueued: false
@@ -117,7 +121,7 @@ Item {
     }
 
     function command() {
-        return [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+        return [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--include-contributions", includeContributions ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
     }
 
     function copyMap(value) {
@@ -278,6 +282,7 @@ Item {
             actions = Array.isArray(data.actions) ? data.actions : [];
             failedActions = Array.isArray(data.failedActions) ? data.failedActions : [];
             repositories = Array.isArray(data.repositories) ? data.repositories : [];
+            contributions = data.contributions && Array.isArray(data.contributions.days) ? data.contributions : {total: 0, days: []};
             warnings = Array.isArray(data.warnings) ? data.warnings : [];
             rateLimit = data.rateLimit || null;
         } catch (error) {

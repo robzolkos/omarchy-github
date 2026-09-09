@@ -462,6 +462,21 @@ Panel {
             }
           }
 
+          ContributionsBlock {
+            id: contributionsBlock
+            width: parent.width
+            // The whole block hides when the user turns it off in settings, so
+            // they get back the same vertical real estate the dashboard had
+            // before this feature shipped.
+            visible: github.includeContributions
+            // Hide during the very first load: a heatmap that has not yet
+            // arrived reads as broken rather than empty, and the dashboard's
+            // loading summary in the hero already covers the wait.
+            days: github.contributions.days
+            total: github.contributions.total
+            login: github.login
+          }
+
           DashboardSection {
             id: notificationsSection
             title: "UNREAD NOTIFICATIONS"
@@ -727,6 +742,17 @@ Panel {
             id: settingsContent
             width: settingsFlick.width
             spacing: Style.space(20)
+
+            Toggle {
+              width: parent.width
+              label: "Include contribution calendar"
+              description: "Show the year-long contribution heatmap at the top of the dashboard."
+              checked: github.includeContributions
+              foreground: root.foreground
+              accent: Color.accent
+              fontFamily: root.fontFamily
+              onClicked: root.persistSettings({ includeContributions: !github.includeContributions })
+            }
 
             Column {
               width: parent.width
@@ -1315,6 +1341,137 @@ Panel {
           elide: Text.ElideRight
         }
       }
+    }
+  }
+
+  // Year-long contribution calendar. Rendered as GitHub's profile heatmap:
+  // 53 columns of weeks, 7 rows of days. Shading scales from the foreground
+  // color so it tracks the active theme without any hardcoded palette.
+  component ContributionsBlock: Column {
+    id: block
+    property var days: []
+    property int total: 0
+    property string login: ""
+    width: parent ? parent.width : 0
+    spacing: Style.space(8)
+
+    // GitHub returns 53 weeks of 7 days. We pre-bucket on the panel side so
+    // adding a day or shifting the count thresholds costs only this expression,
+    // not a fresh aggregation in QML.
+    readonly property var weeks: {
+      var all = Array.isArray(days) ? days : []
+      var columns = []
+      var week = []
+      for (var i = 0; i < all.length; i++) {
+        week.push(all[i])
+        if (week.length === 7) {
+          columns.push(week)
+          week = []
+        }
+      }
+      if (week.length > 0) {
+        while (week.length < 7) week.push({date: "", count: 0, level: -1})
+        columns.push(week)
+      }
+      return columns
+    }
+    readonly property int dayCount: Array.isArray(days) ? days.length : 0
+    // Cell + gap tuned to fit ~53 columns inside the panel width while keeping
+    // each square large enough to read. Style.space returns device-pixel-aware
+    // multiples so the same component works at every monitor scale.
+    readonly property real cellGap: Style.space(2)
+    readonly property int weekCount: weeks.length
+    readonly property real cellSize: {
+      // Fit 53 columns into the block width by shrinking the cell. The minimum
+      // keeps the heatmap readable; below it we drop to scrolling instead of
+      // letting the squares dissolve into single pixels.
+      var available = width - (weekCount - 1) * cellGap
+      var fit = available / weekCount
+      return Math.max(3, Math.min(Style.space(10), Math.floor(fit)))
+    }
+    readonly property real gridWidth: weekCount > 0 ? (weekCount * cellSize + (weekCount - 1) * cellGap) : 0
+    // Band thresholds mirror GitHub's profile so the visual is familiar: 0,
+    // 1–3, 4–6, 7–9, 10+. The alpha ramp anchors on the theme foreground so
+    // empty days sit on the surface and the busiest days approach text colour.
+    function shadeAlpha(level) {
+      if (level <= 0) return 0.10
+      if (level === 1) return 0.30
+      if (level === 2) return 0.55
+      if (level === 3) return 0.75
+      return 0.92
+    }
+    function shade(level) {
+      if (level < 0) return "transparent"
+      return Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, shadeAlpha(level))
+    }
+
+    PanelSeparator { foreground: root.foreground }
+    PanelSectionHeader {
+      width: parent.width
+      text: "CONTRIBUTIONS  " + (total > 0 ? Number(total).toLocaleString(Qt.locale(), "f", 0) : dayCount)
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+    }
+    Item {
+      // The grid owns its own width so the cell layout stays predictable
+      // across themes. cellSize is computed above to fit the panel width, so
+      // this Item is sized to the resulting grid and centered horizontally.
+      width: gridWidth
+      anchors.horizontalCenter: parent.horizontalCenter
+      height: cellSize * 7 + cellGap * 6
+      Row {
+        spacing: block.cellGap
+        Repeater {
+          model: block.weeks
+          delegate: Column {
+            required property var modelData
+            spacing: block.cellGap
+            Repeater {
+              model: modelData
+              delegate: Rectangle {
+                required property var modelData
+                width: block.cellSize
+                height: block.cellSize
+                radius: 1
+                color: block.shade(Number(modelData.level) || 0)
+                // A future day in a partially filled final week must render as
+                // a hole in the heatmap rather than a faded empty cell.
+                visible: String(modelData.date || "") !== ""
+                MouseArea {
+                  id: dayMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    if (block.login !== "") root.openUrl("https://github.com/" + block.login)
+                  }
+                  PanelToolTip {
+                    visible: dayMouse.containsMouse && String(parent.modelData.date || "") !== ""
+                    fontFamily: root.fontFamily
+                    text: {
+                      var date = String(parent.modelData.date || "")
+                      if (date === "") return ""
+                      var count = Number(parent.modelData.count || 0)
+                      return count + " contribution" + (count === 1 ? " " : "s ") + "on " + date
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    // Footer line carries the year summary and the profile link. Centered so
+    // the heatmap stays the visual anchor and the text reads as supporting.
+    Text {
+      width: parent.width
+      text: dayCount > 0 ? (Number(total).toLocaleString(Qt.locale(), "f", 0) + " contributions in the last year") : ""
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      horizontalAlignment: Text.AlignHCenter
+      visible: dayCount > 0
     }
   }
 

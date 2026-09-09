@@ -7,6 +7,7 @@ include_archived=false
 include_forks=false
 include_archived_reviews=false
 include_draft_reviews=false
+include_contributions=true
 repository_scope="owned"
 action_scan="recent"
 action_limit=15
@@ -27,6 +28,8 @@ Usage: omarchy-github-fetch [options]
                                 archived repositories (default: false)
   --include-draft-reviews BOOL  Include review requests on draft pull requests
                                 (default: false)
+  --include-contributions BOOL  Fetch the year-long contribution calendar
+                                (default: true)
   --repository-scope MODE       owned, or organizations to also list the
                                 repositories you reach through an organization
                                 (default: owned)
@@ -52,6 +55,7 @@ while (($#)); do
     --include-forks) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_forks=$2; shift 2 ;;
     --include-archived-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived_reviews=$2; shift 2 ;;
     --include-draft-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_draft_reviews=$2; shift 2 ;;
+    --include-contributions) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_contributions=$2; shift 2 ;;
     --repository-scope) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; repository_scope=${2,,}; shift 2 ;;
     --action-scan) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; action_scan=${2,,}; shift 2 ;;
     --action-repo-limit) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; action_limit=$2; shift 2 ;;
@@ -77,10 +81,10 @@ integer "$failed_limit" && ((failed_limit >= 1 && failed_limit <= 100)) || { ech
 if [[ $repository_scope == organizations ]]; then owner_affiliations="[OWNER,ORGANIZATION_MEMBER]"; else owner_affiliations="OWNER"; fi
 
 emit_state() {
-  jq -n --arg state "$1" --arg message "$2" --arg scope "$repository_scope" '{schemaVersion:1,state:$state,message:$message,login:"",repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],rateLimit:null}'
+  jq -n --arg state "$1" --arg message "$2" --arg scope "$repository_scope" '{schemaVersion:1,state:$state,message:$message,login:"",repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],contributions:{total:0,days:[]},rateLimit:null}'
 }
 
-command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"error","message":"jq is required.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"myPullRequestsTotal":0,"actions":[],"failedActions":[],"repositories":[],"warnings":[]}' ; exit 0; }
+command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"error","message":"jq is required.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"myPullRequestsTotal":0,"actions":[],"failedActions":[],"repositories":[],"warnings":[],"contributions":{"total":0,"days":[]}}' ; exit 0; }
 if [[ -n $mark_notification && ! $mark_notification =~ ^[0-9]+$ ]]; then
   jq -n --arg id "$mark_notification" '{state:"error",message:"Invalid notification thread id.",notificationId:$id}'
   exit 2
@@ -284,9 +288,21 @@ if [[ $action_scan != off && $(jq 'length' "$tmp/repos.json") -gt 0 ]]; then
   jq --slurpfile actions "$tmp/actions.json" 'map(. as $repo|.activeActions=([$actions[0][]|select(.repository==$repo.nameWithOwner)]|length))' "$tmp/repos.json" >"$tmp/repos.next" && mv "$tmp/repos.next" "$tmp/repos.json"
 fi
 
+# Year-long contribution calendar. Bucketing into 5 levels (matching GitHub's
+# 0 / 1-3 / 4-6 / 7-9 / 10+ bands) here keeps the QML render free of counting
+# work and lets the panel scale its shading from the theme foreground alone.
+printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
+if bool "$include_contributions"; then
+  if ! contributions=$(gh api graphql -f query='query { viewer { contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount } } } } } }' 2>"$tmp/contributions.err"); then
+    api_error contributions "$tmp/contributions.err"
+  else
+    jq '{total:.data.viewer.contributionsCollection.contributionCalendar.totalContributions, days:[.data.viewer.contributionsCollection.contributionCalendar.weeks[]?.contributionDays[]? | {date:.date, count:.contributionCount, level:(if .contributionCount == 0 then 0 elif .contributionCount <= 3 then 1 elif .contributionCount <= 6 then 2 elif .contributionCount <= 9 then 3 else 4 end)}]}' <(printf '%s' "$contributions") >"$tmp/contributions.json" 2>/dev/null || printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
+  fi
+fi
+
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
 repo_count=$(jq 'length' "$tmp/repos.json")
 if [[ $graphql_ok == false && $repo_count -eq 0 ]]; then state=error; message="GitHub repositories could not be loaded."; else state=ready; message=""; fi
 rate_remaining=$(jq -r '.remaining // 999999' "$tmp/rate.json")
 if { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } || grep -qiE 'rate.?limit|secondary rate' "$warnings"; then state=rate-limited; message="GitHub API rate limit reached."; fi
-jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],warnings:$warnings,rateLimit:$rate[0]}'
+jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --slurpfile contributions "$tmp/contributions.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],contributions:$contributions[0],warnings:$warnings,rateLimit:$rate[0]}'
