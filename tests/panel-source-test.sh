@@ -65,6 +65,8 @@ assert_contains 'visible: root.settingsOpen' \
   "the settings page is always visible"
 assert_contains $'pageFlip.stop()\n      settingsOpen = false' \
   "closing the panel leaves it on the settings page"
+assert_contains $'linkBehaviorDropdown.close()\n    repositoryScopeDropdown.close()\n    refreshIntervalDropdown.close()\n    contributionsPositionDropdown.close()\n    if (sortPicker) sortPicker.close()' \
+  "leaving settings does not close every settings dropdown"
 assert_contains $'id: readActionStrip\n      visible: linkRow.showReadAction\n      anchors.right: parent.right\n      anchors.top: parent.top\n      anchors.bottom: parent.bottom\n      width: Style.space(32)' \
   "notification read target does not fill the row height at its right edge"
 assert_contains $'anchors.right: readActionStrip.visible ? readActionStrip.left : parent.right\n      anchors.verticalCenter: parent.verticalCenter\n      anchors.leftMargin: Style.space(9)\n      anchors.rightMargin: readActionStrip.visible ? 0 : Style.space(9)' \

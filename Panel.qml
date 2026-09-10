@@ -213,6 +213,7 @@ Panel {
     linkBehaviorDropdown.close()
     repositoryScopeDropdown.close()
     refreshIntervalDropdown.close()
+    contributionsPositionDropdown.close()
     if (sortPicker) sortPicker.close()
     pageFlip.restart()
   }
