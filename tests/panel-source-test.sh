@@ -123,6 +123,12 @@ assert_contains 'var count = Number(dayCell.modelData.count || 0)' \
   "contribution tooltips do not read the count from the day delegate"
 assert_not_contains 'parent.modelData' \
   "contribution tooltips still read model data from their MouseArea parent"
+# A populated calendar can legitimately report a zero annual total. Its header
+# must show that API total rather than substituting the number of day cells.
+assert_contains 'text: "CONTRIBUTIONS  " + Number(total).toLocaleString(Qt.locale(), "f", 0)' \
+  "zero-total populated calendars do not display the reported total"
+assert_not_contains 'total > 0 ? Number(total).toLocaleString(Qt.locale(), "f", 0) : dayCount' \
+  "contribution header substitutes the populated day count for a zero total"
 assert_not_contains $'text: "GITHUB CONTRIBUTIONS"' \
   "old GITHUB CONTRIBUTIONS heading was not removed"
 assert_not_contains $'text: "POSITION"' \

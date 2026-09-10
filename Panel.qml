@@ -1456,7 +1456,7 @@ Panel {
     PanelSeparator { foreground: root.foreground }
     PanelSectionHeader {
       width: parent.width
-      text: "CONTRIBUTIONS  " + (total > 0 ? Number(total).toLocaleString(Qt.locale(), "f", 0) : dayCount)
+      text: "CONTRIBUTIONS  " + Number(total).toLocaleString(Qt.locale(), "f", 0)
       foreground: root.foreground
       fontFamily: root.fontFamily
     }
