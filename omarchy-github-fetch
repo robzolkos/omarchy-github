@@ -293,9 +293,12 @@ fi
 # while preserving GitHub's dynamically calculated calendar shading.
 printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
 if bool "$include_contributions"; then
-  if ! contributions=$(gh api graphql -f query='query { viewer { contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount contributionLevel } } } } } }' 2>"$tmp/contributions.err"); then
+  if ! contributions=$(gh api graphql -f query='query { viewer { contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount contributionLevel } } } } } rateLimit { remaining resetAt cost } }' 2>"$tmp/contributions.err"); then
     api_error contributions "$tmp/contributions.err"
   else
+    if printf '%s' "$contributions" | jq -e '.data.rateLimit | select(type == "object" and (.remaining | type) == "number" and (.resetAt | type) == "string" and (.cost | type) == "number")' >"$tmp/rate.next" 2>/dev/null; then
+      mv "$tmp/rate.next" "$tmp/rate.json"
+    fi
     if ! printf '%s' "$contributions" | jq -e '
       def whole_nonnegative: type == "number" and . >= 0 and . == floor;
       .data.viewer.contributionsCollection.contributionCalendar as $calendar

@@ -58,6 +58,10 @@ fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   if [[ $* == *contributionsCollection* ]]; then
+    if [[ ${GH_CONTRIBUTION_RATE:-} == true ]]; then
+      printf '%s\n' '{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":1,"weeks":[{"contributionDays":[{"date":"2025-09-07","contributionCount":1,"contributionLevel":"FIRST_QUARTILE"}]}]}}},"rateLimit":{"remaining":0,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}'
+      exit 0
+    fi
     if [[ ${GH_INVALID_CONTRIBUTIONS:-} == true ]]; then
       printf '%s\n' '{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":null}}}}}'
       exit 0
@@ -145,6 +149,9 @@ assert_jq '(.contributions.days[2].count == 2 and .contributions.days[2].level =
 grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG" || fail "contribution calendar query did not request contributionLevel"
 invalid_contributions=$(GH_INVALID_CONTRIBUTIONS=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
 assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and (.warnings|index("contributions: invalid API response") != null)' "$invalid_contributions" "invalid contribution payload falls back with a warning"
+contribution_rate=$(GH_CONTRIBUTION_RATE=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
+assert_jq '.rateLimit.remaining == 0 and .rateLimit.cost == 1 and .state == "rate-limited"' "$contribution_rate" "contribution query updates the displayed rate limit"
+grep -q 'contributionsCollection.*rateLimit.*remaining' "$GH_TEST_LOG" || fail "contribution query did not request the final rate limit"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
