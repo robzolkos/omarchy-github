@@ -467,17 +467,13 @@ Panel {
             }
           }
 
-          // Three slots, one block per position. Only the slot selected by the user
-          // is visible, so the dashboard never renders the calendar twice when
-          // the position changes mid-session. Each binds the same data, so a
-          // refresh updates all three slots simultaneously.
-          ContributionsBlock {
+          // Each dashboard position loads the same component only while it is
+          // selected, so one contribution calendar tree exists at a time.
+          Loader {
             id: contributionsBlockTop
             width: parent.width
-            visible: github.includeContributions && github.contributionsPosition === "Top"
-            days: github.contributions.days
-            total: github.contributions.total
-            login: github.login
+            active: github.includeContributions && github.contributionsPosition === "Top"
+            sourceComponent: contributionsBlockComponent
           }
 
           DashboardSection {
@@ -560,13 +556,11 @@ Panel {
             delegateComponent: failedActionDelegate
           }
 
-          ContributionsBlock {
+          Loader {
             id: contributionsBlockMiddle
             width: parent.width
-            visible: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"
-            days: github.contributions.days
-            total: github.contributions.total
-            login: github.login
+            active: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"
+            sourceComponent: contributionsBlockComponent
           }
 
           PanelSeparator { foreground: root.foreground }
@@ -679,13 +673,11 @@ Panel {
             horizontalAlignment: Text.AlignHCenter
           }
 
-          ContributionsBlock {
+          Loader {
             id: contributionsBlockBottom
             width: parent.width
-            visible: github.includeContributions && github.contributionsPosition === "Bottom"
-            days: github.contributions.days
-            total: github.contributions.total
-            login: github.login
+            active: github.includeContributions && github.contributionsPosition === "Bottom"
+            sourceComponent: contributionsBlockComponent
           }
         }
       }
@@ -1389,6 +1381,15 @@ Panel {
           elide: Text.ElideRight
         }
       }
+    }
+  }
+
+  Component {
+    id: contributionsBlockComponent
+    ContributionsBlock {
+      days: github.contributions.days
+      total: github.contributions.total
+      login: github.login
     }
   }
 

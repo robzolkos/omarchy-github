@@ -11,6 +11,14 @@ assert_contains() {
 assert_not_contains() {
   [[ $PANEL_SOURCE != *"$1"* ]] || fail "$2"
 }
+assert_occurrences() {
+  local needle=$1 expected=$2 message=$3 haystack=$PANEL_SOURCE count=0
+  while [[ $haystack == *"$needle"* ]]; do
+    haystack=${haystack#*"$needle"}
+    count=$((count + 1))
+  done
+  [[ $count -eq $expected ]] || fail "$message (expected $expected, found $count)"
+}
 
 assert_contains 'glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))' \
   "authored pull requests without checks do not use the pull request glyph"
@@ -103,12 +111,12 @@ assert_contains '"No repositories loaded."' \
 # palette would silently break light themes and the dim mode.
 assert_contains $'Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, shadeAlpha(level))' \
   "contribution cells do not anchor their shading on the theme foreground"
-assert_contains $'ContributionsBlock {\n            id: contributionsBlock' \
-  "contributions block is not instantiated above the first section"
-assert_contains 'visible: github.includeContributions' \
-  "contributions block does not honour the includeContributions setting"
-assert_contains 'days: github.contributions.days' \
-  "contributions block does not bind to the helper output"
+assert_occurrences 'ContributionsBlock {' 1 \
+  "the panel does not use one shared contribution calendar component"
+assert_contains $'Component {\n    id: contributionsBlockComponent\n    ContributionsBlock {\n      days: github.contributions.days\n      total: github.contributions.total\n      login: github.login' \
+  "the shared contribution calendar does not bind to the helper output"
+assert_contains 'active: github.includeContributions' \
+  "contributions loaders do not honour the includeContributions setting"
 assert_contains 'width: gridWidth' \
   "contributions grid does not own its own width"
 assert_contains 'anchors.horizontalCenter: parent.horizontalCenter' \
@@ -143,13 +151,15 @@ assert_contains 'onClicked: root.persistSettings({ includeContributions: !github
   "include-contributions toggle does not persist its new value"
 assert_contains $'onChanged: function(value) { root.persistSettings({ contributionsPosition: value }) }' \
   "contributions position dropdown does not persist its new value"
-# All three slots must guard visibility on the position string so a stale
-# render can't leave two blocks visible when the user switches position.
-assert_contains 'visible: github.includeContributions && github.contributionsPosition === "Top"' \
-  "top contributions slot does not gate on position === Top"
-assert_contains 'visible: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"' \
-  "middle contributions slot does not gate on the middle position"
-assert_contains 'visible: github.includeContributions && github.contributionsPosition === "Bottom"' \
-  "bottom contributions slot does not gate on position === Bottom"
+# Loaders keep each placement in the dashboard flow while only the selected
+# slot instantiates the shared calendar tree.
+assert_contains $'Loader {\n            id: contributionsBlockTop\n            width: parent.width\n            active: github.includeContributions && github.contributionsPosition === "Top"\n            sourceComponent: contributionsBlockComponent' \
+  "top contributions slot does not conditionally load the shared calendar"
+assert_contains $'Loader {\n            id: contributionsBlockMiddle\n            width: parent.width\n            active: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"\n            sourceComponent: contributionsBlockComponent' \
+  "middle contributions slot does not conditionally load the shared calendar"
+assert_contains $'Loader {\n            id: contributionsBlockBottom\n            width: parent.width\n            active: github.includeContributions && github.contributionsPosition === "Bottom"\n            sourceComponent: contributionsBlockComponent' \
+  "bottom contributions slot does not conditionally load the shared calendar"
+assert_occurrences 'sourceComponent: contributionsBlockComponent' 3 \
+  "all contribution placements do not use the shared calendar component"
 
 echo "panel source tests passed"
