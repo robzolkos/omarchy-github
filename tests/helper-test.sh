@@ -39,6 +39,35 @@ chmod +x "$sandbox/gh"
 out=$(PATH="$sandbox" "$HELPER")
 assert_jq '.state == "logged-out" and (.repositories|length) == 0' "$out" "logged-out state"
 
+cat >"$sandbox/curl" <<'CURL'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_TEST_LOG"
+if [[ ${CURL_FAIL_CONTRIBUTIONS:-} == true ]]; then
+  echo "profile contribution request failed" >&2
+  exit 1
+fi
+if [[ ${CURL_INVALID_CONTRIBUTIONS:-} == true ]]; then
+  printf '%s\n' '<html>not a contribution calendar</html>'
+  exit 0
+fi
+printf '%s\n' '<h2>15 contributions in the last year</h2>'
+for index in $(seq 0 368); do
+  day=$(date -u -d "2025-09-07 +$index days" +%F)
+  if [[ $index -eq 0 ]]; then count=1; level=1
+  elif [[ $index -eq 1 ]]; then count=14; level=4
+  else count=0; level=0
+  fi
+  if [[ $index -eq 0 ]]; then printf '<td data-level="%s" data-date="%s"></td>\n' "$level" "$day"
+  else printf '<td data-date="%s" data-level="%s"></td>\n' "$day" "$level"
+  fi
+  if [[ $count -eq 0 ]]; then printf '<tool-tip>No contributions on this day.</tool-tip>\n'
+  elif [[ $count -eq 1 ]]; then printf '<tool-tip>1 contribution on this day.</tool-tip>\n'
+  else printf '<tool-tip>%s contributions on this day.</tool-tip>\n' "$count"
+  fi
+done
+CURL
+chmod +x "$sandbox/curl"
+
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
@@ -143,15 +172,16 @@ assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/
 assert_jq '(.actions|length == 1) and (.failedActions|length == 1)' "$out" "active and failed actions separated"
 assert_jq '.repositoryScope == "owned"' "$out" "default repository scope reported"
 assert_jq '.rateLimit.remaining == 4999 and (.warnings|length) == 0' "$out" "rate limit and warnings"
-assert_jq '(.contributions.total == 14) and (.contributions.days|length == 14)' "$out" "contribution calendar fetched with every day"
-assert_jq '[.contributions.days[0:5][] | .level] == [0,1,2,3,4]' "$out" "GitHub contribution levels map to the five panel levels"
-assert_jq '(.contributions.days[2].count == 2 and .contributions.days[2].level == 2) and (.contributions.days[3].count == 4 and .contributions.days[3].level == 3) and (.contributions.days[4].count == 7 and .contributions.days[4].level == 4)' "$out" "contribution levels come from GitHub rather than fixed count thresholds"
-grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG" || fail "contribution calendar query did not request contributionLevel"
-invalid_contributions=$(GH_INVALID_CONTRIBUTIONS=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
-assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and (.warnings|index("contributions: invalid API response") != null)' "$invalid_contributions" "invalid contribution payload falls back with a warning"
-contribution_rate=$(GH_CONTRIBUTION_RATE=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
-assert_jq '.rateLimit.remaining == 0 and .rateLimit.cost == 1 and .state == "rate-limited"' "$contribution_rate" "contribution query updates the displayed rate limit"
-grep -q 'contributionsCollection.*rateLimit.*remaining' "$GH_TEST_LOG" || fail "contribution query did not request the final rate limit"
+assert_jq '(.contributions.total == 15) and (.contributions.days|length == 369)' "$out" "contribution calendar matches the profile graph"
+assert_jq '[.contributions.days[0:2][].level] == [1,4]' "$out" "profile contribution levels map to the five panel levels"
+assert_jq '(.contributions.days[0].count == 1 and .contributions.days[0].level == 1) and (.contributions.days[1].count == 14 and .contributions.days[1].level == 4)' "$out" "profile contribution counts and levels stay paired by date"
+grep -q 'https://github.com/users/octocat/contributions' "$GH_TEST_LOG" || fail "contribution calendar did not request the profile graph"
+if grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG"; then fail "contribution calendar used GraphQL despite a valid profile response"; fi
+invalid_contributions=$(CURL_INVALID_CONTRIBUTIONS=true GH_INVALID_CONTRIBUTIONS=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
+assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and (.warnings|index("contributions: invalid API response") != null)' "$invalid_contributions" "invalid profile and API contribution payloads fall back with a warning"
+contribution_rate=$(CURL_FAIL_CONTRIBUTIONS=true GH_CONTRIBUTION_RATE=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
+assert_jq '.rateLimit.remaining == 0 and .rateLimit.cost == 1 and .state == "rate-limited"' "$contribution_rate" "contribution API fallback updates the displayed rate limit"
+grep -q 'contributionsCollection.*rateLimit.*remaining' "$GH_TEST_LOG" || fail "contribution fallback did not request the final rate limit"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
@@ -263,7 +293,7 @@ assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "Act
 
 : >"$GH_TEST_LOG"
 out_no_contrib=$(PATH="$sandbox:$PATH" "$HELPER" --include-contributions false)
-if grep -q 'contributionsCollection' "$GH_TEST_LOG"; then fail "contribution query ran despite --include-contributions false"; fi
+if grep -q 'contributionsCollection\|/contributions' "$GH_TEST_LOG"; then fail "contribution query ran despite --include-contributions false"; fi
 assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0)' "$out_no_contrib" "contribution calendar is empty when disabled"
 
 echo "helper tests passed"

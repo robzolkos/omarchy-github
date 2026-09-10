@@ -40,6 +40,7 @@ Repository search, metric filters, and sorting make even large GitHub accounts m
 - Omarchy Quattro with shell plugin support
 - [`gh`](https://cli.github.com/) on `PATH`
 - [`jq`](https://jqlang.github.io/jq/)
+- [`curl`](https://curl.se/); Omarchy includes it by default
 - A Nerd Font; Omarchy includes one by default
 
 Authenticate GitHub CLI before installing:
@@ -198,8 +199,9 @@ The shell watches local plugin files, making QML iteration fast.
 
 ## How it works
 
-`Service.qml` schedules an executable helper, `omarchy-github-fetch`, which calls GitHub exclusively through `gh api` and processes responses with `jq`.
+`Service.qml` schedules an executable helper, `omarchy-github-fetch`, which uses `gh api` for authenticated GitHub data, reads the public profile contribution graph with `curl`, and processes responses with `jq`.
 
+- The profile graph fragment supplies contribution totals, daily counts, and levels that exactly match the GitHub profile. GraphQL provides a fallback if the fragment is unavailable.
 - GraphQL retrieves every repository in the configured scope and exact aggregate counts.
 - REST retrieves notifications and workflow runs.
 - GitHub issue search retrieves review requests and assigned issues.
