@@ -12,6 +12,10 @@ assert_contains 'String(setting("repositoryScope", "Owned")).toLowerCase() === "
   "an unrecognised repository scope no longer falls back to the narrower one"
 assert_contains '"--repository-scope", repositoryMode()' \
   "the repository scope setting is not passed to the helper"
+assert_contains $'onIncludeContributionsChanged: {\n        if (settingsReady && includeContributions)\n            refresh();\n    }' \
+  "re-enabling contributions does not refresh the cleared calendar"
+assert_contains 'Component.onCompleted: settingsReady = true' \
+  "the contribution refresh guard does not skip initial property setup"
 assert_contains 'fetchedRepositoryScope = String(data.repositoryScope || "owned");' \
   "the panel cannot tell which scope the payload was fetched with"
 assert_contains 'readonly property string contributionsPosition:' \

@@ -29,7 +29,12 @@ Item {
     // Year-long contribution calendar for the top-of-panel heatmap. Bucketed
     // by the helper into 5 levels (0..4) so the panel never re-counts.
     property var contributions: ({total: 0, days: []})
+    property bool settingsReady: false
     readonly property bool includeContributions: boolSetting("includeContributions", true)
+    onIncludeContributionsChanged: {
+        if (settingsReady && includeContributions)
+            refresh();
+    }
     // Normalised the same way as linkBehavior: matched against the known
     // options rather than substring-matched, so an unknown value falls back
     // to the default position instead of silently snapping elsewhere.
@@ -396,6 +401,7 @@ Item {
     }
 
     visible: false
+    Component.onCompleted: settingsReady = true
 
     Timer {
         interval: root.refreshIntervalSec * 1000
