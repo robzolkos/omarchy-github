@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-HELPER="$ROOT/omarchy-github-fetch"
+HELPER=${HELPER:-"$ROOT/omarchy-github-fetch"}
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_jq() { jq -e "$1" <<<"$2" >/dev/null || fail "$3"; }
@@ -231,6 +231,7 @@ cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
 if [[ $1 == api && $2 == graphql ]]; then
+  printf '%s\n' "$*" >>"$GH_TEST_LOG"
   cat <<'JSON'
 {"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":10,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
 JSON
@@ -249,7 +250,7 @@ assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "Act
 
 : >"$GH_TEST_LOG"
 out_no_contrib=$(PATH="$sandbox:$PATH" "$HELPER" --include-contributions false)
-assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0)' "$out_no_contrib" "contribution calendar is empty when disabled"
 if grep -q 'contributionsCollection' "$GH_TEST_LOG"; then fail "contribution query ran despite --include-contributions false"; fi
+assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0)' "$out_no_contrib" "contribution calendar is empty when disabled"
 
 echo "helper tests passed"
