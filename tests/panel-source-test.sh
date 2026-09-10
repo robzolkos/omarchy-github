@@ -117,6 +117,8 @@ assert_occurrences 'ContributionsBlock {' 1 \
   "the panel does not use one shared contribution calendar component"
 assert_contains $'Component {\n    id: contributionsBlockComponent\n    ContributionsBlock {\n      days: github.contributions.days\n      total: github.contributions.total\n      login: github.login' \
   "the shared contribution calendar does not bind to the helper output"
+assert_contains 'readonly property bool hasContributionCalendar: Array.isArray(github.contributions.days) && github.contributions.days.length > 0' \
+  "empty contribution payloads do not collapse the contribution section"
 assert_contains 'active: github.includeContributions' \
   "contributions loaders do not honour the includeContributions setting"
 assert_contains 'width: gridWidth' \
@@ -155,11 +157,11 @@ assert_contains $'onChanged: function(value) { root.persistSettings({ contributi
   "contributions position dropdown does not persist its new value"
 # Loaders keep each placement in the dashboard flow while only the selected
 # slot instantiates the shared calendar tree.
-assert_contains $'Loader {\n            id: contributionsBlockTop\n            width: parent.width\n            active: github.includeContributions && github.contributionsPosition === "Top"\n            sourceComponent: contributionsBlockComponent' \
+assert_contains $'Loader {\n            id: contributionsBlockTop\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Top"\n            sourceComponent: contributionsBlockComponent' \
   "top contributions slot does not conditionally load the shared calendar"
-assert_contains $'Loader {\n            id: contributionsBlockMiddle\n            width: parent.width\n            active: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"\n            sourceComponent: contributionsBlockComponent' \
+assert_contains $'Loader {\n            id: contributionsBlockMiddle\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Middle (above repositories)"\n            sourceComponent: contributionsBlockComponent' \
   "middle contributions slot does not conditionally load the shared calendar"
-assert_contains $'Loader {\n            id: contributionsBlockBottom\n            width: parent.width\n            active: github.includeContributions && github.contributionsPosition === "Bottom"\n            sourceComponent: contributionsBlockComponent' \
+assert_contains $'Loader {\n            id: contributionsBlockBottom\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Bottom"\n            sourceComponent: contributionsBlockComponent' \
   "bottom contributions slot does not conditionally load the shared calendar"
 assert_occurrences 'sourceComponent: contributionsBlockComponent' 3 \
   "all contribution placements do not use the shared calendar component"

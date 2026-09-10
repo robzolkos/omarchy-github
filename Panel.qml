@@ -68,6 +68,7 @@ Panel {
     { value: "prs", label: "PRs" }, { value: "actions", label: "Actions" }
   ]
   readonly property var displayedRepositories: filteredRepositories()
+  readonly property bool hasContributionCalendar: Array.isArray(github.contributions.days) && github.contributions.days.length > 0
   readonly property var cursorTargets: buildCursorTargets()
   readonly property var selectedTarget: cursorTargets.length > 0 ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))] : null
 
@@ -473,7 +474,7 @@ Panel {
           Loader {
             id: contributionsBlockTop
             width: parent.width
-            active: github.includeContributions && github.contributionsPosition === "Top"
+            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Top"
             sourceComponent: contributionsBlockComponent
           }
 
@@ -560,7 +561,7 @@ Panel {
           Loader {
             id: contributionsBlockMiddle
             width: parent.width
-            active: github.includeContributions && github.contributionsPosition === "Middle (above repositories)"
+            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Middle (above repositories)"
             sourceComponent: contributionsBlockComponent
           }
 
@@ -677,7 +678,7 @@ Panel {
           Loader {
             id: contributionsBlockBottom
             width: parent.width
-            active: github.includeContributions && github.contributionsPosition === "Bottom"
+            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Bottom"
             sourceComponent: contributionsBlockComponent
           }
         }
