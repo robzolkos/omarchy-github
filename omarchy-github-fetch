@@ -296,7 +296,28 @@ if bool "$include_contributions"; then
   if ! contributions=$(gh api graphql -f query='query { viewer { contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount contributionLevel } } } } } }' 2>"$tmp/contributions.err"); then
     api_error contributions "$tmp/contributions.err"
   else
-    jq '{total:.data.viewer.contributionsCollection.contributionCalendar.totalContributions, days:[.data.viewer.contributionsCollection.contributionCalendar.weeks[]?.contributionDays[]? | {date:.date, count:.contributionCount, level:({"NONE":0,"FIRST_QUARTILE":1,"SECOND_QUARTILE":2,"THIRD_QUARTILE":3,"FOURTH_QUARTILE":4}[.contributionLevel] // 0)}]}' <(printf '%s' "$contributions") >"$tmp/contributions.json" 2>/dev/null || printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
+    if ! printf '%s' "$contributions" | jq -e '
+      def whole_nonnegative: type == "number" and . >= 0 and . == floor;
+      .data.viewer.contributionsCollection.contributionCalendar as $calendar
+      | select(($calendar | type) == "object")
+      | select($calendar.totalContributions | whole_nonnegative)
+      | select(($calendar.weeks | type) == "array")
+      | select(all($calendar.weeks[];
+          ((.contributionDays | type) == "array") and
+          all(.contributionDays[];
+            ((.date | type) == "string") and
+            (.contributionCount | whole_nonnegative) and
+            (.contributionLevel as $level
+              | ["NONE", "FIRST_QUARTILE", "SECOND_QUARTILE", "THIRD_QUARTILE", "FOURTH_QUARTILE"]
+              | index($level) != null))))
+      | {total:$calendar.totalContributions, days:[$calendar.weeks[].contributionDays[] | {date:.date, count:.contributionCount, level:({"NONE":0,"FIRST_QUARTILE":1,"SECOND_QUARTILE":2,"THIRD_QUARTILE":3,"FOURTH_QUARTILE":4}[.contributionLevel])}]}
+      | select((.total | whole_nonnegative) and ((.days | type) == "array") and all(.days[]; ((.date | type) == "string") and (.count | whole_nonnegative) and ((.level | type) == "number") and .level >= 0 and .level <= 4))
+    ' >"$tmp/contributions.next" 2>/dev/null; then
+      printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
+      printf '%s\n' 'contributions: invalid API response' >>"$warnings"
+    else
+      mv "$tmp/contributions.next" "$tmp/contributions.json"
+    fi
   fi
 fi
 

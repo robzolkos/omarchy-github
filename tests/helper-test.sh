@@ -58,6 +58,10 @@ fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   if [[ $* == *contributionsCollection* ]]; then
+    if [[ ${GH_INVALID_CONTRIBUTIONS:-} == true ]]; then
+      printf '%s\n' '{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":null}}}}}'
+      exit 0
+    fi
     # These counts deliberately cross the helper's former fixed boundaries.
     # GitHub's enum remains authoritative when its dynamic quartiles differ.
     cat <<'JSON'
@@ -139,6 +143,8 @@ assert_jq '(.contributions.total == 14) and (.contributions.days|length == 14)' 
 assert_jq '[.contributions.days[0:5][] | .level] == [0,1,2,3,4]' "$out" "GitHub contribution levels map to the five panel levels"
 assert_jq '(.contributions.days[2].count == 2 and .contributions.days[2].level == 2) and (.contributions.days[3].count == 4 and .contributions.days[3].level == 3) and (.contributions.days[4].count == 7 and .contributions.days[4].level == 4)' "$out" "contribution levels come from GitHub rather than fixed count thresholds"
 grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG" || fail "contribution calendar query did not request contributionLevel"
+invalid_contributions=$(GH_INVALID_CONTRIBUTIONS=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
+assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and (.warnings|index("contributions: invalid API response") != null)' "$invalid_contributions" "invalid contribution payload falls back with a warning"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
