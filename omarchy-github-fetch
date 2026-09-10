@@ -288,15 +288,15 @@ if [[ $action_scan != off && $(jq 'length' "$tmp/repos.json") -gt 0 ]]; then
   jq --slurpfile actions "$tmp/actions.json" 'map(. as $repo|.activeActions=([$actions[0][]|select(.repository==$repo.nameWithOwner)]|length))' "$tmp/repos.json" >"$tmp/repos.next" && mv "$tmp/repos.next" "$tmp/repos.json"
 fi
 
-# Year-long contribution calendar. Bucketing into 5 levels (matching GitHub's
-# 0 / 1-3 / 4-6 / 7-9 / 10+ bands) here keeps the QML render free of counting
-# work and lets the panel scale its shading from the theme foreground alone.
+# GitHub assigns each contribution day a level relative to the viewer's own
+# activity. Converting that enum to 0–4 keeps the QML render presentation-only
+# while preserving GitHub's dynamically calculated calendar shading.
 printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
 if bool "$include_contributions"; then
-  if ! contributions=$(gh api graphql -f query='query { viewer { contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount } } } } } }' 2>"$tmp/contributions.err"); then
+  if ! contributions=$(gh api graphql -f query='query { viewer { contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount contributionLevel } } } } } }' 2>"$tmp/contributions.err"); then
     api_error contributions "$tmp/contributions.err"
   else
-    jq '{total:.data.viewer.contributionsCollection.contributionCalendar.totalContributions, days:[.data.viewer.contributionsCollection.contributionCalendar.weeks[]?.contributionDays[]? | {date:.date, count:.contributionCount, level:(if .contributionCount == 0 then 0 elif .contributionCount <= 3 then 1 elif .contributionCount <= 6 then 2 elif .contributionCount <= 9 then 3 else 4 end)}]}' <(printf '%s' "$contributions") >"$tmp/contributions.json" 2>/dev/null || printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
+    jq '{total:.data.viewer.contributionsCollection.contributionCalendar.totalContributions, days:[.data.viewer.contributionsCollection.contributionCalendar.weeks[]?.contributionDays[]? | {date:.date, count:.contributionCount, level:({"NONE":0,"FIRST_QUARTILE":1,"SECOND_QUARTILE":2,"THIRD_QUARTILE":3,"FOURTH_QUARTILE":4}[.contributionLevel] // 0)}]}' <(printf '%s' "$contributions") >"$tmp/contributions.json" 2>/dev/null || printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
   fi
 fi
 

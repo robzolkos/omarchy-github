@@ -58,12 +58,10 @@ fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   if [[ $* == *contributionsCollection* ]]; then
-    # Two weeks so the bucketing covers more than one boundary: a quiet week
-    # (all level 0) sandwiched between a heavy week (level 4) and a single day
-    # (level 1). The bucketed output must round-trip through the same shape
-    # the panel renders.
+    # These counts deliberately cross the helper's former fixed boundaries.
+    # GitHub's enum remains authoritative when its dynamic quartiles differ.
     cat <<'JSON'
-{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":13,"weeks":[{"contributionDays":[{"date":"2025-09-07","contributionCount":0},{"date":"2025-09-08","contributionCount":0},{"date":"2025-09-09","contributionCount":0},{"date":"2025-09-10","contributionCount":0},{"date":"2025-09-11","contributionCount":0},{"date":"2025-09-12","contributionCount":0},{"date":"2025-09-13","contributionCount":0}]},{"contributionDays":[{"date":"2025-09-14","contributionCount":0},{"date":"2025-09-15","contributionCount":12},{"date":"2025-09-16","contributionCount":0},{"date":"2025-09-17","contributionCount":0},{"date":"2025-09-18","contributionCount":0},{"date":"2025-09-19","contributionCount":0},{"date":"2025-09-20","contributionCount":1}]}]}}}}}
+{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":14,"weeks":[{"contributionDays":[{"date":"2025-09-07","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-08","contributionCount":1,"contributionLevel":"FIRST_QUARTILE"},{"date":"2025-09-09","contributionCount":2,"contributionLevel":"SECOND_QUARTILE"},{"date":"2025-09-10","contributionCount":4,"contributionLevel":"THIRD_QUARTILE"},{"date":"2025-09-11","contributionCount":7,"contributionLevel":"FOURTH_QUARTILE"},{"date":"2025-09-12","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-13","contributionCount":0,"contributionLevel":"NONE"}]},{"contributionDays":[{"date":"2025-09-14","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-15","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-16","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-17","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-18","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-19","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-20","contributionCount":0,"contributionLevel":"NONE"}]}]}}}}}
 JSON
     exit 0
   fi
@@ -137,10 +135,10 @@ assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/
 assert_jq '(.actions|length == 1) and (.failedActions|length == 1)' "$out" "active and failed actions separated"
 assert_jq '.repositoryScope == "owned"' "$out" "default repository scope reported"
 assert_jq '.rateLimit.remaining == 4999 and (.warnings|length) == 0' "$out" "rate limit and warnings"
-assert_jq '(.contributions.total == 13) and (.contributions.days|length == 14)' "$out" "contribution calendar fetched and bucketed"
-assert_jq '(.contributions.days[8].count == 12) and (.contributions.days[8].level == 4)' "$out" "12 contributions lands in the highest band"
-assert_jq '(.contributions.days[13].count == 1) and (.contributions.days[13].level == 1)' "$out" "single contribution lands in the lowest non-zero band"
-grep -q 'contributionsCollection' "$GH_TEST_LOG" || fail "contribution calendar was not queried via GraphQL"
+assert_jq '(.contributions.total == 14) and (.contributions.days|length == 14)' "$out" "contribution calendar fetched with every day"
+assert_jq '[.contributions.days[0:5][] | .level] == [0,1,2,3,4]' "$out" "GitHub contribution levels map to the five panel levels"
+assert_jq '(.contributions.days[2].count == 2 and .contributions.days[2].level == 2) and (.contributions.days[3].count == 4 and .contributions.days[3].level == 3) and (.contributions.days[4].count == 7 and .contributions.days[4].level == 4)' "$out" "contribution levels come from GitHub rather than fixed count thresholds"
+grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG" || fail "contribution calendar query did not request contributionLevel"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"

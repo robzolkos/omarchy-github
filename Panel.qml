@@ -1403,9 +1403,9 @@ Panel {
     width: parent ? parent.width : 0
     spacing: Style.space(8)
 
-    // GitHub returns 53 weeks of 7 days. We pre-bucket on the panel side so
-    // adding a day or shifting the count thresholds costs only this expression,
-    // not a fresh aggregation in QML.
+    // GitHub returns 53 weeks of 7 days. The helper preserves its calculated
+    // contribution levels, and this component groups the flat day list into
+    // the week columns used by the heatmap.
     readonly property var weeks: {
       var all = Array.isArray(days) ? days : []
       var columns = []
@@ -1438,9 +1438,9 @@ Panel {
       return Math.max(3, Math.min(Style.space(10), Math.floor(fit)))
     }
     readonly property real gridWidth: weekCount > 0 ? (weekCount * cellSize + (weekCount - 1) * cellGap) : 0
-    // Band thresholds mirror GitHub's profile so the visual is familiar: 0,
-    // 1–3, 4–6, 7–9, 10+. The alpha ramp anchors on the theme foreground so
-    // empty days sit on the surface and the busiest days approach text colour.
+    // Levels mirror GitHub's activity quartiles. The alpha ramp anchors on the
+    // theme foreground so empty days sit on the surface and the busiest days
+    // approach text colour.
     function shadeAlpha(level) {
       if (level <= 0) return 0.10
       if (level === 1) return 0.30
