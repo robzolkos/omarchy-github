@@ -113,6 +113,16 @@ assert_contains 'width: gridWidth' \
   "contributions grid does not own its own width"
 assert_contains 'anchors.horizontalCenter: parent.horizontalCenter' \
   "contributions grid does not center inside the block"
+assert_contains $'delegate: Rectangle {\n                id: dayCell\n                required property var modelData' \
+  "contribution day delegates do not expose their model data to the tooltip"
+assert_contains 'visible: dayMouse.containsMouse && String(dayCell.modelData.date || "") !== ""' \
+  "contribution tooltips do not read visibility from the day delegate"
+assert_contains 'var date = String(dayCell.modelData.date || "")' \
+  "contribution tooltips do not read the date from the day delegate"
+assert_contains 'var count = Number(dayCell.modelData.count || 0)' \
+  "contribution tooltips do not read the count from the day delegate"
+assert_not_contains 'parent.modelData' \
+  "contribution tooltips still read model data from their MouseArea parent"
 assert_not_contains $'text: "GITHUB CONTRIBUTIONS"' \
   "old GITHUB CONTRIBUTIONS heading was not removed"
 assert_not_contains $'text: "POSITION"' \

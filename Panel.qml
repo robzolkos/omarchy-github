@@ -1477,6 +1477,7 @@ Panel {
             Repeater {
               model: modelData
               delegate: Rectangle {
+                id: dayCell
                 required property var modelData
                 width: block.cellSize
                 height: block.cellSize
@@ -1494,12 +1495,12 @@ Panel {
                     if (block.login !== "") root.openUrl("https://github.com/" + block.login)
                   }
                   PanelToolTip {
-                    visible: dayMouse.containsMouse && String(parent.modelData.date || "") !== ""
+                    visible: dayMouse.containsMouse && String(dayCell.modelData.date || "") !== ""
                     fontFamily: root.fontFamily
                     text: {
-                      var date = String(parent.modelData.date || "")
+                      var date = String(dayCell.modelData.date || "")
                       if (date === "") return ""
-                      var count = Number(parent.modelData.count || 0)
+                      var count = Number(dayCell.modelData.count || 0)
                       return count + " contribution" + (count === 1 ? " " : "s ") + "on " + date
                     }
                   }
