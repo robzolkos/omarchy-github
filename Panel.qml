@@ -475,6 +475,8 @@ Panel {
             id: contributionsBlockTop
             width: parent.width
             active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Top"
+            visible: active
+            height: active ? implicitHeight : 0
             sourceComponent: contributionsBlockComponent
           }
 
@@ -562,6 +564,8 @@ Panel {
             id: contributionsBlockMiddle
             width: parent.width
             active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Middle (above repositories)"
+            visible: active
+            height: active ? implicitHeight : 0
             sourceComponent: contributionsBlockComponent
           }
 
@@ -679,6 +683,8 @@ Panel {
             id: contributionsBlockBottom
             width: parent.width
             active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Bottom"
+            visible: active
+            height: active ? implicitHeight : 0
             sourceComponent: contributionsBlockComponent
           }
         }

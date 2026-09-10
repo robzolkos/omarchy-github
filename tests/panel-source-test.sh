@@ -156,14 +156,20 @@ assert_contains 'onClicked: root.persistSettings({ includeContributions: !github
 assert_contains $'onChanged: function(value) { root.persistSettings({ contributionsPosition: value }) }' \
   "contributions position dropdown does not persist its new value"
 # Loaders keep each placement in the dashboard flow while only the selected
-# slot instantiates the shared calendar tree.
-assert_contains $'Loader {\n            id: contributionsBlockTop\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Top"\n            sourceComponent: contributionsBlockComponent' \
+# slot instantiates the shared calendar tree. Qt retains a Loader's former
+# implicit height after deactivation, so inactive slots must explicitly be
+# zero-height or they leave a calendar-sized blank region in the Column.
+assert_contains $'Loader {\n            id: contributionsBlockTop\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Top"\n            visible: active\n            height: active ? implicitHeight : 0\n            sourceComponent: contributionsBlockComponent' \
   "top contributions slot does not conditionally load the shared calendar"
-assert_contains $'Loader {\n            id: contributionsBlockMiddle\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Middle (above repositories)"\n            sourceComponent: contributionsBlockComponent' \
+assert_contains $'Loader {\n            id: contributionsBlockMiddle\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Middle (above repositories)"\n            visible: active\n            height: active ? implicitHeight : 0\n            sourceComponent: contributionsBlockComponent' \
   "middle contributions slot does not conditionally load the shared calendar"
-assert_contains $'Loader {\n            id: contributionsBlockBottom\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Bottom"\n            sourceComponent: contributionsBlockComponent' \
+assert_contains $'Loader {\n            id: contributionsBlockBottom\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Bottom"\n            visible: active\n            height: active ? implicitHeight : 0\n            sourceComponent: contributionsBlockComponent' \
   "bottom contributions slot does not conditionally load the shared calendar"
 assert_occurrences 'sourceComponent: contributionsBlockComponent' 3 \
   "all contribution placements do not use the shared calendar component"
+assert_occurrences 'visible: active' 3 \
+  "inactive contribution placements remain visible"
+assert_occurrences 'height: active ? implicitHeight : 0' 3 \
+  "inactive contribution placements still reserve blank dashboard space"
 
 echo "panel source tests passed"
