@@ -52,14 +52,16 @@ assert_contains $'var confirmed = section.preparedAction\n          section.disa
   "bulk action does not submit the originally prepared snapshot"
 assert_contains $'function activateCursor() {\n    if (!selectedTarget) return\n    openRow(selectedTarget.kind, selectedTarget.row.id, selectedTarget.row.url)' \
   "opening a notification from the keyboard does not mark it read"
-assert_contains $'function openRow(kind, id, url) {\n    var target = String(url || "")\n    var notificationId = String(id || "")\n    openUrl(target)\n    if (kind === "notification") github.markNotificationRead(notificationId)' \
-  "opening a notification marks it before launching the URL"
+assert_contains $'function openRow(kind, id, url) {\n    var target = String(url || "")\n    var notificationId = String(id || "")\n    if (openUrl(target) && kind === "notification") github.markNotificationRead(notificationId)' \
+  "a rejected notification URL is still marked read"
 assert_contains $'function markSelectedRead() {\n    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))' \
   "keyboard notification marking is blocked during refresh"
 assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationId || linkRow.rowId, linkRow.url)' \
   "clicking a notification does not open and mark it read"
-assert_contains $'if (github.linkBehavior === "Browser tab") Util.execArgv(["xdg-open", value])\n    else Quickshell.execDetached(["omarchy-launch-webapp", value])' \
-  "the open-links setting does not choose between the browser and the web app window"
+assert_contains $'function openUrl(url) {\n    var accepted = urlLauncher.openUrl(url)\n    if (accepted) close()\n    return accepted\n  }' \
+  "the panel does not return the URL policy result after conditionally closing"
+assert_contains $'UrlLauncher {\n    id: urlLauncher\n    linkBehavior: github.linkBehavior\n    // Both launchers receive an argv array; no URL is interpreted by a shell.\n    onBrowserLaunchRequested: function(argv) { Util.execArgv(argv) }\n    onWebAppLaunchRequested: function(argv) { Quickshell.execDetached(argv) }' \
+  "the open-links setting does not choose argv-safe browser and web app launchers"
 
 # updateEntryInline rewrites the shell.json entry whole, so a persist that does
 # not carry the current settings forward silently drops every other setting.

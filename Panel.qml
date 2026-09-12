@@ -125,8 +125,7 @@ Panel {
   function openRow(kind, id, url) {
     var target = String(url || "")
     var notificationId = String(id || "")
-    openUrl(target)
-    if (kind === "notification") github.markNotificationRead(notificationId)
+    if (openUrl(target) && kind === "notification") github.markNotificationRead(notificationId)
   }
   function markSelectedRead() {
     if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))
@@ -181,12 +180,9 @@ Panel {
   }
 
   function openUrl(url) {
-    var value = String(url || "")
-    if (value === "") return
-    // Let the default URL handler route browser tabs to the intended workspace.
-    if (github.linkBehavior === "Browser tab") Util.execArgv(["xdg-open", value])
-    else Quickshell.execDetached(["omarchy-launch-webapp", value])
-    close()
+    var accepted = urlLauncher.openUrl(url)
+    if (accepted) close()
+    return accepted
   }
 
   // Settings live on this widget's entry in shell.json; the shell hot-reloads
@@ -277,6 +273,14 @@ Panel {
   onCursorTargetsChanged: ensureCursor()
 
   Service { id: github; settings: root.settings }
+
+  UrlLauncher {
+    id: urlLauncher
+    linkBehavior: github.linkBehavior
+    // Both launchers receive an argv array; no URL is interpreted by a shell.
+    onBrowserLaunchRequested: function(argv) { Util.execArgv(argv) }
+    onWebAppLaunchRequested: function(argv) { Quickshell.execDetached(argv) }
+  }
 
   IpcHandler {
     target: root.ipcTarget

@@ -1,0 +1,16 @@
+module qs.Ui
+Panel 1.0 Panel.qml
+BarIconButton 1.0 UiItem.qml
+KeyboardPanel 1.0 UiItem.qml
+PanelKeyCatcher 1.0 UiItem.qml
+PanelHero 1.0 UiItem.qml
+PanelActionButton 1.0 UiItem.qml
+BorderSurface 1.0 UiItem.qml
+PanelToolTip 1.0 UiItem.qml
+PanelSeparator 1.0 UiItem.qml
+PanelSectionHeader 1.0 UiItem.qml
+Dropdown 1.0 UiItem.qml
+Toggle 1.0 UiItem.qml
+CursorSurface 1.0 UiItem.qml
+Button 1.0 UiItem.qml
+TextField 1.0 UiItem.qml
