@@ -40,10 +40,12 @@ assert_contains $'width: Style.space(22)\n                  height: Style.space(
   "the refresh spinner still collapses and shifts the gear"
 assert_not_contains 'width: visible ? Style.space(22) : 0' \
   "the refresh spinner still collapses and shifts the gear"
-assert_contains $'text: "󰑐"\n                    color: root.dim\n                    font.family: root.fontFamily\n                    font.pixelSize: Style.font.icon' \
-  "a fetch in flight does not show a spinner next to the gear"
-assert_contains $'text: "Updating from GitHub"' \
-  "the refresh spinner has no tooltip"
+assert_contains $'text: "󰑐"\n                    color: root.dim\n                    font.family: root.fontFamily\n                    font.pixelSize: Style.font.icon\n                    transformOrigin: Item.Center\n\n                    RotationAnimation on rotation {\n                      from: 0\n                      to: 360\n                      duration: 900\n                      loops: Animation.Infinite\n                      running: github.loading' \
+  "a fetch in flight does not show a centered, continuously rotating spinner"
+assert_contains $'hoverEnabled: github.loading\n                    enabled: github.loading\n                    acceptedButtons: Qt.NoButton\n\n                    PanelToolTip {\n                      visible: parent.containsMouse\n                      text: "Updating from GitHub"' \
+  "the refresh spinner tooltip is not hover-only or intercepts clicks"
+assert_contains $'visible: github.state !== "ready" || github.warnings.length > 0' \
+  "first-load, error, and rate-limited status details are hidden"
 assert_contains $'onActionBusyChanged: if (section.actionBusy) section.disarmAction()\n    onActionEnabledChanged: if (!section.actionEnabled) section.disarmAction()\n    onActionRevisionChanged: if (section.actionArmed) section.disarmAction()' \
   "bulk confirmation is not invalidated when notification state changes"
 assert_contains $'var confirmed = section.preparedAction\n          section.disarmAction()\n          section.actionTriggered(confirmed)' \

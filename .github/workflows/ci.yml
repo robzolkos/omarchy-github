@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends jq
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends jq qml6-module-qtquick qml6-module-qttest qt6-declarative-dev-tools qt6-qpa-plugins
 
       - name: Validate manifest
         run: jq empty manifest.json
@@ -33,3 +33,6 @@ jobs:
 
       - name: Run service source tests
         run: tests/service-source-test.sh
+
+      - name: Run QML behavior tests
+        run: tests/qml-test.sh
