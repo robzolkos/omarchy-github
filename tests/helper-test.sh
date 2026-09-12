@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-HELPER="$ROOT/omarchy-github-fetch"
+HELPER=${HELPER:-"$ROOT/omarchy-github-fetch"}
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_jq() { jq -e "$1" <<<"$2" >/dev/null || fail "$3"; }
@@ -39,6 +39,35 @@ chmod +x "$sandbox/gh"
 out=$(PATH="$sandbox" "$HELPER")
 assert_jq '.state == "logged-out" and (.repositories|length) == 0' "$out" "logged-out state"
 
+cat >"$sandbox/curl" <<'CURL'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_TEST_LOG"
+if [[ ${CURL_FAIL_CONTRIBUTIONS:-} == true ]]; then
+  echo "profile contribution request failed" >&2
+  exit 1
+fi
+if [[ ${CURL_INVALID_CONTRIBUTIONS:-} == true ]]; then
+  printf '%s\n' '<html>not a contribution calendar</html>'
+  exit 0
+fi
+printf '%s\n' '<h2>15 contributions in the last year</h2>'
+for index in $(seq 0 368); do
+  day=$(date -u -d "2025-09-07 +$index days" +%F)
+  if [[ $index -eq 0 ]]; then count=1; level=1
+  elif [[ $index -eq 1 ]]; then count=14; level=4
+  else count=0; level=0
+  fi
+  if [[ $index -eq 0 ]]; then printf '<td data-level="%s" data-date="%s"></td>\n' "$level" "$day"
+  else printf '<td data-date="%s" data-level="%s"></td>\n' "$day" "$level"
+  fi
+  if [[ $count -eq 0 ]]; then printf '<tool-tip>No contributions on this day.</tool-tip>\n'
+  elif [[ $count -eq 1 ]]; then printf '<tool-tip>1 contribution on this day.</tool-tip>\n'
+  else printf '<tool-tip>%s contributions on this day.</tool-tip>\n' "$count"
+  fi
+done
+CURL
+chmod +x "$sandbox/curl"
+
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
@@ -57,6 +86,22 @@ if [[ $1 == api && $2 == --method && $3 == PUT ]]; then
 fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
+  if [[ $* == *contributionsCollection* ]]; then
+    if [[ ${GH_CONTRIBUTION_RATE:-} == true ]]; then
+      printf '%s\n' '{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":1,"weeks":[{"contributionDays":[{"date":"2025-09-07","contributionCount":1,"contributionLevel":"FIRST_QUARTILE"}]}]}}},"rateLimit":{"remaining":0,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}'
+      exit 0
+    fi
+    if [[ ${GH_INVALID_CONTRIBUTIONS:-} == true ]]; then
+      printf '%s\n' '{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":null}}}}}'
+      exit 0
+    fi
+    # These counts deliberately cross the helper's former fixed boundaries.
+    # GitHub's enum remains authoritative when its dynamic quartiles differ.
+    cat <<'JSON'
+{"data":{"viewer":{"contributionsCollection":{"contributionCalendar":{"totalContributions":14,"weeks":[{"contributionDays":[{"date":"2025-09-07","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-08","contributionCount":1,"contributionLevel":"FIRST_QUARTILE"},{"date":"2025-09-09","contributionCount":2,"contributionLevel":"SECOND_QUARTILE"},{"date":"2025-09-10","contributionCount":4,"contributionLevel":"THIRD_QUARTILE"},{"date":"2025-09-11","contributionCount":7,"contributionLevel":"FOURTH_QUARTILE"},{"date":"2025-09-12","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-13","contributionCount":0,"contributionLevel":"NONE"}]},{"contributionDays":[{"date":"2025-09-14","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-15","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-16","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-17","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-18","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-19","contributionCount":0,"contributionLevel":"NONE"},{"date":"2025-09-20","contributionCount":0,"contributionLevel":"NONE"}]}]}}}}}
+JSON
+    exit 0
+  fi
   if [[ $* == *author:@me* ]]; then
     # The second node carries no rollup, which must land as NONE rather than
     # being conflated with a pending run.
@@ -127,6 +172,16 @@ assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/
 assert_jq '(.actions|length == 1) and (.failedActions|length == 1)' "$out" "active and failed actions separated"
 assert_jq '.repositoryScope == "owned"' "$out" "default repository scope reported"
 assert_jq '.rateLimit.remaining == 4999 and (.warnings|length) == 0' "$out" "rate limit and warnings"
+assert_jq '(.contributions.total == 15) and (.contributions.days|length == 369)' "$out" "contribution calendar matches the profile graph"
+assert_jq '[.contributions.days[0:2][].level] == [1,4]' "$out" "profile contribution levels map to the five panel levels"
+assert_jq '(.contributions.days[0].count == 1 and .contributions.days[0].level == 1) and (.contributions.days[1].count == 14 and .contributions.days[1].level == 4)' "$out" "profile contribution counts and levels stay paired by date"
+grep -q 'https://github.com/users/octocat/contributions' "$GH_TEST_LOG" || fail "contribution calendar did not request the profile graph"
+if grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG"; then fail "contribution calendar used GraphQL despite a valid profile response"; fi
+invalid_contributions=$(CURL_INVALID_CONTRIBUTIONS=true GH_INVALID_CONTRIBUTIONS=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
+assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and (.warnings|index("contributions: invalid API response") != null)' "$invalid_contributions" "invalid profile and API contribution payloads fall back with a warning"
+contribution_rate=$(CURL_FAIL_CONTRIBUTIONS=true GH_CONTRIBUTION_RATE=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
+assert_jq '.rateLimit.remaining == 0 and .rateLimit.cost == 1 and .state == "rate-limited"' "$contribution_rate" "contribution API fallback updates the displayed rate limit"
+grep -q 'contributionsCollection.*rateLimit.*remaining' "$GH_TEST_LOG" || fail "contribution fallback did not request the final rate limit"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"
@@ -219,6 +274,7 @@ cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
 if [[ $1 == api && $2 == graphql ]]; then
+  printf '%s\n' "$*" >>"$GH_TEST_LOG"
   cat <<'JSON'
 {"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":1,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":10,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
 JSON
@@ -234,5 +290,10 @@ GH
 chmod +x "$sandbox/gh"
 scoped=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all)
 assert_jq '(.warnings|length) > 0 and (.warnings[0]|test("403"))' "$scoped" "Actions warnings keep the API error text"
+
+: >"$GH_TEST_LOG"
+out_no_contrib=$(PATH="$sandbox:$PATH" "$HELPER" --include-contributions false)
+if grep -q 'contributionsCollection\|/contributions' "$GH_TEST_LOG"; then fail "contribution query ran despite --include-contributions false"; fi
+assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0)' "$out_no_contrib" "contribution calendar is empty when disabled"
 
 echo "helper tests passed"

@@ -10,6 +10,7 @@ Your GitHub work, directly in the Omarchy bar.
 
 The dashboard is ordered by urgency so the most actionable work appears first:
 
+- **Contribution calendar** — your year on GitHub at a glance. The heatmap shades from the theme foreground, with each cell showing the contribution count on hover. Turn it off in settings if you do not want it, and choose whether it sits at the top, between activity and repositories, or at the very bottom.
 - **Unread notifications** — open the related thread, mark it read in place, or clear the whole list
 - **Review requests** — see pull requests waiting on your review
 - **My pull requests** — track the pull requests you opened and the state of their checks
@@ -39,6 +40,7 @@ Repository search, metric filters, and sorting make even large GitHub accounts m
 - Omarchy Quattro with shell plugin support
 - [`gh`](https://cli.github.com/) on `PATH`
 - [`jq`](https://jqlang.github.io/jq/)
+- [`curl`](https://curl.se/); Omarchy includes it by default
 - A Nerd Font; Omarchy includes one by default
 
 Authenticate GitHub CLI before installing:
@@ -143,6 +145,8 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 | Open links | **Web app window** |
 | Include archived repositories | Off |
 | Include forks | Off |
+| Include contribution calendar | **On** |
+| Calendar position | **Top** |
 | Repository scope | **Owned** |
 | Include review requests and issues from archived repositories | Off |
 | Include review requests on drafts | Off |
@@ -195,8 +199,9 @@ The shell watches local plugin files, making QML iteration fast.
 
 ## How it works
 
-`Service.qml` schedules an executable helper, `omarchy-github-fetch`, which calls GitHub exclusively through `gh api` and processes responses with `jq`.
+`Service.qml` schedules an executable helper, `omarchy-github-fetch`, which uses `gh api` for authenticated GitHub data, reads the public profile contribution graph with `curl`, and processes responses with `jq`.
 
+- The profile graph fragment supplies contribution totals, daily counts, and levels that exactly match the GitHub profile. GraphQL provides a fallback if the fragment is unavailable.
 - GraphQL retrieves every repository in the configured scope and exact aggregate counts.
 - REST retrieves notifications and workflow runs.
 - GitHub issue search retrieves review requests and assigned issues.

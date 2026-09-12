@@ -46,6 +46,11 @@ Panel {
     { value: "1800", label: "Every 30 minutes" },
     { value: "3600", label: "Every hour" }
   ]
+  readonly property var contributionsPositionOptions: [
+    { value: "Top", label: "Top" },
+    { value: "Middle (above repositories)", label: "Middle (above repositories)" },
+    { value: "Bottom", label: "Bottom" }
+  ]
   // Carry sub-notch wheel deltas between events. Touchpads emit many small
   // angleDeltas; mice often emit a fake 1–2px pixelDelta that would otherwise
   // crawl the dashboard a couple of pixels per click.
@@ -63,6 +68,7 @@ Panel {
     { value: "prs", label: "PRs" }, { value: "actions", label: "Actions" }
   ]
   readonly property var displayedRepositories: filteredRepositories()
+  readonly property bool hasContributionCalendar: Array.isArray(github.contributions.days) && github.contributions.days.length > 0
   readonly property var cursorTargets: buildCursorTargets()
   readonly property var selectedTarget: cursorTargets.length > 0 ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))] : null
 
@@ -207,6 +213,7 @@ Panel {
     linkBehaviorDropdown.close()
     repositoryScopeDropdown.close()
     refreshIntervalDropdown.close()
+    contributionsPositionDropdown.close()
     if (sortPicker) sortPicker.close()
     pageFlip.restart()
   }
@@ -504,6 +511,17 @@ Panel {
             }
           }
 
+          // Each dashboard position loads the same component only while it is
+          // selected, so one contribution calendar tree exists at a time.
+          Loader {
+            id: contributionsBlockTop
+            width: parent.width
+            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Top"
+            visible: active
+            height: active ? implicitHeight : 0
+            sourceComponent: contributionsBlockComponent
+          }
+
           DashboardSection {
             id: notificationsSection
             title: "UNREAD NOTIFICATIONS"
@@ -584,6 +602,15 @@ Panel {
             expanded: root.failuresExpanded
             onToggleExpanded: root.failuresExpanded = !root.failuresExpanded
             delegateComponent: failedActionDelegate
+          }
+
+          Loader {
+            id: contributionsBlockMiddle
+            width: parent.width
+            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Middle (above repositories)"
+            visible: active
+            height: active ? implicitHeight : 0
+            sourceComponent: contributionsBlockComponent
           }
 
           PanelSeparator { foreground: root.foreground }
@@ -695,6 +722,15 @@ Panel {
             font.pixelSize: Style.font.caption
             horizontalAlignment: Text.AlignHCenter
           }
+
+          Loader {
+            id: contributionsBlockBottom
+            width: parent.width
+            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Bottom"
+            visible: active
+            height: active ? implicitHeight : 0
+            sourceComponent: contributionsBlockComponent
+          }
         }
       }
 
@@ -771,6 +807,44 @@ Panel {
             id: settingsContent
             width: settingsFlick.width
             spacing: Style.space(20)
+
+            Column {
+              width: parent.width
+              spacing: Style.space(8)
+
+              Toggle {
+                width: parent.width
+                label: "Show contribution calendar"
+                description: "Render the year-long contribution heatmap in the dashboard."
+                checked: github.includeContributions
+                foreground: root.foreground
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onClicked: root.persistSettings({ includeContributions: !github.includeContributions })
+              }
+
+              Text {
+                text: "Contributions Position"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+
+              Dropdown {
+                id: contributionsPositionDropdown
+                width: parent.width
+                showLabel: false
+                options: root.contributionsPositionOptions
+                foreground: root.foreground
+                background: Color.popups.background
+                accent: Color.accent
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.persistSettings({ contributionsPosition: value }) }
+
+                Binding on value { value: github.contributionsPosition }
+              }
+            }
 
             Column {
               width: parent.width
@@ -1359,6 +1433,147 @@ Panel {
           elide: Text.ElideRight
         }
       }
+    }
+  }
+
+  Component {
+    id: contributionsBlockComponent
+    ContributionsBlock {
+      days: github.contributions.days
+      total: github.contributions.total
+      login: github.login
+    }
+  }
+
+  // Year-long contribution calendar. Rendered as GitHub's profile heatmap:
+  // 53 columns of weeks, 7 rows of days. Shading scales from the foreground
+  // color so it tracks the active theme without any hardcoded palette.
+  component ContributionsBlock: Column {
+    id: block
+    property var days: []
+    property int total: 0
+    property string login: ""
+    width: parent ? parent.width : 0
+    spacing: Style.space(8)
+
+    // GitHub returns 53 weeks of 7 days. The helper preserves its calculated
+    // contribution levels, and this component groups the flat day list into
+    // the week columns used by the heatmap.
+    readonly property var weeks: {
+      var all = Array.isArray(days) ? days : []
+      var columns = []
+      var week = []
+      for (var i = 0; i < all.length; i++) {
+        week.push(all[i])
+        if (week.length === 7) {
+          columns.push(week)
+          week = []
+        }
+      }
+      if (week.length > 0) {
+        while (week.length < 7) week.push({date: "", count: 0, level: -1})
+        columns.push(week)
+      }
+      return columns
+    }
+    readonly property int dayCount: Array.isArray(days) ? days.length : 0
+    // Cell + gap tuned to fit ~53 columns inside the panel width while keeping
+    // each square large enough to read. Style.space returns device-pixel-aware
+    // multiples so the same component works at every monitor scale.
+    readonly property real cellGap: Style.space(2)
+    readonly property int weekCount: weeks.length
+    readonly property real cellSize: {
+      // Fit 53 columns into the block width by shrinking the cell. The minimum
+      // keeps the heatmap readable; below it we drop to scrolling instead of
+      // letting the squares dissolve into single pixels.
+      var available = width - (weekCount - 1) * cellGap
+      var fit = available / weekCount
+      return Math.max(3, Math.min(Style.space(10), Math.floor(fit)))
+    }
+    readonly property real gridWidth: weekCount > 0 ? (weekCount * cellSize + (weekCount - 1) * cellGap) : 0
+    // Levels mirror GitHub's activity quartiles. The alpha ramp anchors on the
+    // theme foreground so empty days sit on the surface and the busiest days
+    // approach text colour.
+    function shadeAlpha(level) {
+      if (level <= 0) return 0.10
+      if (level === 1) return 0.30
+      if (level === 2) return 0.55
+      if (level === 3) return 0.75
+      return 0.92
+    }
+    function shade(level) {
+      if (level < 0) return "transparent"
+      return Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, shadeAlpha(level))
+    }
+
+    PanelSeparator { foreground: root.foreground }
+    PanelSectionHeader {
+      width: parent.width
+      text: "CONTRIBUTIONS  " + Number(total).toLocaleString(Qt.locale(), "f", 0)
+      foreground: root.foreground
+      fontFamily: root.fontFamily
+    }
+    Item {
+      // The grid owns its own width so the cell layout stays predictable
+      // across themes. cellSize is computed above to fit the panel width, so
+      // this Item is sized to the resulting grid and centered horizontally.
+      width: gridWidth
+      anchors.horizontalCenter: parent.horizontalCenter
+      height: cellSize * 7 + cellGap * 6
+      Row {
+        spacing: block.cellGap
+        Repeater {
+          model: block.weeks
+          delegate: Column {
+            required property var modelData
+            spacing: block.cellGap
+            Repeater {
+              model: modelData
+              delegate: Rectangle {
+                id: dayCell
+                required property var modelData
+                width: block.cellSize
+                height: block.cellSize
+                radius: 1
+                color: block.shade(Number(modelData.level) || 0)
+                // A future day in a partially filled final week must render as
+                // a hole in the heatmap rather than a faded empty cell.
+                visible: String(modelData.date || "") !== ""
+                MouseArea {
+                  id: dayMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    if (block.login !== "") root.openUrl("https://github.com/" + block.login)
+                  }
+                  PanelToolTip {
+                    visible: dayMouse.containsMouse && String(dayCell.modelData.date || "") !== ""
+                    fontFamily: root.fontFamily
+                    text: {
+                      var date = String(dayCell.modelData.date || "")
+                      if (date === "") return ""
+                      var count = Number(dayCell.modelData.count || 0)
+                      return count + " contribution" + (count === 1 ? " " : "s ") + "on " + date
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    // Footer line carries the year summary and the profile link. Centered so
+    // the heatmap stays the visual anchor and the text reads as supporting.
+    Text {
+      width: parent.width
+      text: dayCount > 0 ? (Number(total).toLocaleString(Qt.locale(), "f", 0) + " contributions in the last year") : ""
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      horizontalAlignment: Text.AlignHCenter
+      visible: dayCount > 0
     }
   }
 

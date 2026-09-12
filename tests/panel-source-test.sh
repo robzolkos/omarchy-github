@@ -11,6 +11,14 @@ assert_contains() {
 assert_not_contains() {
   [[ $PANEL_SOURCE != *"$1"* ]] || fail "$2"
 }
+assert_occurrences() {
+  local needle=$1 expected=$2 message=$3 haystack=$PANEL_SOURCE count=0
+  while [[ $haystack == *"$needle"* ]]; do
+    haystack=${haystack#*"$needle"}
+    count=$((count + 1))
+  done
+  [[ $count -eq $expected ]] || fail "$message (expected $expected, found $count)"
+}
 
 assert_contains 'glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))' \
   "authored pull requests without checks do not use the pull request glyph"
@@ -69,6 +77,8 @@ assert_contains 'visible: root.settingsOpen' \
   "the settings page is always visible"
 assert_contains $'pageFlip.stop()\n      settingsOpen = false' \
   "closing the panel leaves it on the settings page"
+assert_contains $'linkBehaviorDropdown.close()\n    repositoryScopeDropdown.close()\n    refreshIntervalDropdown.close()\n    contributionsPositionDropdown.close()\n    if (sortPicker) sortPicker.close()' \
+  "leaving settings does not close every settings dropdown"
 assert_contains $'id: readActionStrip\n      visible: linkRow.showReadAction\n      anchors.right: parent.right\n      anchors.top: parent.top\n      anchors.bottom: parent.bottom\n      width: Style.space(32)' \
   "notification read target does not fill the row height at its right edge"
 assert_contains $'anchors.right: readActionStrip.visible ? readActionStrip.left : parent.right\n      anchors.verticalCenter: parent.verticalCenter\n      anchors.leftMargin: Style.space(9)\n      anchors.rightMargin: readActionStrip.visible ? 0 : Style.space(9)' \
@@ -109,5 +119,69 @@ assert_contains 'github.fetchedRepositoryScope === "owned" ? "OWNED REPOSITORIES
   "the repository heading does not follow the fetched scope"
 assert_contains '"No repositories loaded."' \
   "the repository empty state still claims a scope"
+
+# The contributions block derives its alpha ramp from the theme foreground so
+# the heatmap shades correctly under every theme. Anchoring on a hardcoded
+# palette would silently break light themes and the dim mode.
+assert_contains $'Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, shadeAlpha(level))' \
+  "contribution cells do not anchor their shading on the theme foreground"
+assert_occurrences 'ContributionsBlock {' 1 \
+  "the panel does not use one shared contribution calendar component"
+assert_contains $'Component {\n    id: contributionsBlockComponent\n    ContributionsBlock {\n      days: github.contributions.days\n      total: github.contributions.total\n      login: github.login' \
+  "the shared contribution calendar does not bind to the helper output"
+assert_contains 'readonly property bool hasContributionCalendar: Array.isArray(github.contributions.days) && github.contributions.days.length > 0' \
+  "empty contribution payloads do not collapse the contribution section"
+assert_contains 'active: github.includeContributions' \
+  "contributions loaders do not honour the includeContributions setting"
+assert_contains 'width: gridWidth' \
+  "contributions grid does not own its own width"
+assert_contains 'anchors.horizontalCenter: parent.horizontalCenter' \
+  "contributions grid does not center inside the block"
+assert_contains $'delegate: Rectangle {\n                id: dayCell\n                required property var modelData' \
+  "contribution day delegates do not expose their model data to the tooltip"
+assert_contains 'visible: dayMouse.containsMouse && String(dayCell.modelData.date || "") !== ""' \
+  "contribution tooltips do not read visibility from the day delegate"
+assert_contains 'var date = String(dayCell.modelData.date || "")' \
+  "contribution tooltips do not read the date from the day delegate"
+assert_contains 'var count = Number(dayCell.modelData.count || 0)' \
+  "contribution tooltips do not read the count from the day delegate"
+assert_not_contains 'parent.modelData' \
+  "contribution tooltips still read model data from their MouseArea parent"
+# A populated calendar can legitimately report a zero annual total. Its header
+# must show that API total rather than substituting the number of day cells.
+assert_contains 'text: "CONTRIBUTIONS  " + Number(total).toLocaleString(Qt.locale(), "f", 0)' \
+  "zero-total populated calendars do not display the reported total"
+assert_not_contains 'total > 0 ? Number(total).toLocaleString(Qt.locale(), "f", 0) : dayCount' \
+  "contribution header substitutes the populated day count for a zero total"
+assert_not_contains $'text: "GITHUB CONTRIBUTIONS"' \
+  "old GITHUB CONTRIBUTIONS heading was not removed"
+assert_not_contains $'text: "POSITION"' \
+  "short POSITION label still present"
+assert_contains $'text: "Contributions Position"' \
+  "contributions position heading is missing or mislabelled"
+assert_contains $'label: "Show contribution calendar"' \
+  "include-contributions toggle is not in the contributions section"
+assert_contains $'options: root.contributionsPositionOptions' \
+  "contributions position dropdown does not bind to its option list"
+assert_contains 'onClicked: root.persistSettings({ includeContributions: !github.includeContributions })' \
+  "include-contributions toggle does not persist its new value"
+assert_contains $'onChanged: function(value) { root.persistSettings({ contributionsPosition: value }) }' \
+  "contributions position dropdown does not persist its new value"
+# Loaders keep each placement in the dashboard flow while only the selected
+# slot instantiates the shared calendar tree. Qt retains a Loader's former
+# implicit height after deactivation, so inactive slots must explicitly be
+# zero-height or they leave a calendar-sized blank region in the Column.
+assert_contains $'Loader {\n            id: contributionsBlockTop\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Top"\n            visible: active\n            height: active ? implicitHeight : 0\n            sourceComponent: contributionsBlockComponent' \
+  "top contributions slot does not conditionally load the shared calendar"
+assert_contains $'Loader {\n            id: contributionsBlockMiddle\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Middle (above repositories)"\n            visible: active\n            height: active ? implicitHeight : 0\n            sourceComponent: contributionsBlockComponent' \
+  "middle contributions slot does not conditionally load the shared calendar"
+assert_contains $'Loader {\n            id: contributionsBlockBottom\n            width: parent.width\n            active: github.includeContributions && root.hasContributionCalendar && github.contributionsPosition === "Bottom"\n            visible: active\n            height: active ? implicitHeight : 0\n            sourceComponent: contributionsBlockComponent' \
+  "bottom contributions slot does not conditionally load the shared calendar"
+assert_occurrences 'sourceComponent: contributionsBlockComponent' 3 \
+  "all contribution placements do not use the shared calendar component"
+assert_occurrences 'visible: active' 3 \
+  "inactive contribution placements remain visible"
+assert_occurrences 'height: active ? implicitHeight : 0' 3 \
+  "inactive contribution placements still reserve blank dashboard space"
 
 echo "panel source tests passed"

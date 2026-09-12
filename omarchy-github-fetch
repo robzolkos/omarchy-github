@@ -7,6 +7,7 @@ include_archived=false
 include_forks=false
 include_archived_reviews=false
 include_draft_reviews=false
+include_contributions=true
 repository_scope="owned"
 action_scan="recent"
 action_limit=15
@@ -27,6 +28,8 @@ Usage: omarchy-github-fetch [options]
                                 archived repositories (default: false)
   --include-draft-reviews BOOL  Include review requests on draft pull requests
                                 (default: false)
+  --include-contributions BOOL  Fetch the year-long contribution calendar
+                                (default: true)
   --repository-scope MODE       owned, or organizations to also list the
                                 repositories you reach through an organization
                                 (default: owned)
@@ -52,6 +55,7 @@ while (($#)); do
     --include-forks) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_forks=$2; shift 2 ;;
     --include-archived-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived_reviews=$2; shift 2 ;;
     --include-draft-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_draft_reviews=$2; shift 2 ;;
+    --include-contributions) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_contributions=$2; shift 2 ;;
     --repository-scope) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; repository_scope=${2,,}; shift 2 ;;
     --action-scan) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; action_scan=${2,,}; shift 2 ;;
     --action-repo-limit) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; action_limit=$2; shift 2 ;;
@@ -77,10 +81,10 @@ integer "$failed_limit" && ((failed_limit >= 1 && failed_limit <= 100)) || { ech
 if [[ $repository_scope == organizations ]]; then owner_affiliations="[OWNER,ORGANIZATION_MEMBER]"; else owner_affiliations="OWNER"; fi
 
 emit_state() {
-  jq -n --arg state "$1" --arg message "$2" --arg scope "$repository_scope" '{schemaVersion:1,state:$state,message:$message,login:"",repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],rateLimit:null}'
+  jq -n --arg state "$1" --arg message "$2" --arg scope "$repository_scope" '{schemaVersion:1,state:$state,message:$message,login:"",repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],contributions:{total:0,days:[]},rateLimit:null}'
 }
 
-command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"error","message":"jq is required.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"myPullRequestsTotal":0,"actions":[],"failedActions":[],"repositories":[],"warnings":[]}' ; exit 0; }
+command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"error","message":"jq is required.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"myPullRequestsTotal":0,"actions":[],"failedActions":[],"repositories":[],"warnings":[],"contributions":{"total":0,"days":[]}}' ; exit 0; }
 if [[ -n $mark_notification && ! $mark_notification =~ ^[0-9]+$ ]]; then
   jq -n --arg id "$mark_notification" '{state:"error",message:"Invalid notification thread id.",notificationId:$id}'
   exit 2
@@ -284,9 +288,71 @@ if [[ $action_scan != off && $(jq 'length' "$tmp/repos.json") -gt 0 ]]; then
   jq --slurpfile actions "$tmp/actions.json" 'map(. as $repo|.activeActions=([$actions[0][]|select(.repository==$repo.nameWithOwner)]|length))' "$tmp/repos.json" >"$tmp/repos.next" && mv "$tmp/repos.next" "$tmp/repos.json"
 fi
 
+# The profile page and GraphQL contribution calendar can disagree because the
+# profile may include contribution sources that GraphQL does not expose. Read
+# the same public graph fragment as the profile so its total, days, and levels
+# stay identical. GraphQL remains a fallback if that fragment is unavailable
+# or GitHub changes its markup.
+printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
+if bool "$include_contributions"; then
+  profile_contributions_ok=false
+  if command -v curl >/dev/null 2>&1 && [[ ${login:-} =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]]; then
+    if curl --fail --silent --show-error --location --max-redirs 3 --connect-timeout 5 --max-time 20 \
+      --proto '=https' --proto-redir '=https' -H 'Accept: text/html' -H 'Accept-Language: en-US' \
+      "https://github.com/users/$login/contributions" >"$tmp/contributions.html" 2>"$tmp/contributions-profile.err" &&
+      jq -Rse '
+        [scan("(<td[^>]*>)[[:space:]]*</td>[[:space:]]*<tool-tip[^>]*>(No contributions|[0-9,]+ contributions?)[^<]*</tool-tip>") as [$cell,$label]
+          | ($cell | capture("data-date=\\\"(?<date>[0-9]{4}-[0-9]{2}-[0-9]{2})\\\"").date) as $date
+          | ($cell | capture("data-level=\\\"(?<level>[0-4])\\\"").level | tonumber) as $level
+          | {date:$date,
+             count:(if $label == "No contributions" then 0 else ($label | capture("(?<count>[0-9,]+)").count | gsub(","; "") | tonumber) end),
+             level:$level}]
+        | sort_by(.date)
+        | {total:(map(.count) | add // 0),days:.}
+        | select((.days | length) >= 350 and (.days | length) <= 371)
+        | select((.days | map(.date) | unique | length) == (.days | length))
+      ' "$tmp/contributions.html" >"$tmp/contributions.next" 2>/dev/null; then
+      mv "$tmp/contributions.next" "$tmp/contributions.json"
+      profile_contributions_ok=true
+    fi
+  fi
+
+  if [[ $profile_contributions_ok == false ]]; then
+    if ! contributions=$(gh api graphql -f query='query { viewer { contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount contributionLevel } } } } } rateLimit { remaining resetAt cost } }' 2>"$tmp/contributions.err"); then
+      api_error contributions "$tmp/contributions.err"
+    else
+      if printf '%s' "$contributions" | jq -e '.data.rateLimit | select(type == "object" and (.remaining | type) == "number" and (.resetAt | type) == "string" and (.cost | type) == "number")' >"$tmp/rate.next" 2>/dev/null; then
+        mv "$tmp/rate.next" "$tmp/rate.json"
+      fi
+      if ! printf '%s' "$contributions" | jq -e '
+        def whole_nonnegative: type == "number" and . >= 0 and . == floor;
+        .data.viewer.contributionsCollection.contributionCalendar as $calendar
+        | select(($calendar | type) == "object")
+        | select($calendar.totalContributions | whole_nonnegative)
+        | select(($calendar.weeks | type) == "array")
+        | select(all($calendar.weeks[];
+            ((.contributionDays | type) == "array") and
+            all(.contributionDays[];
+              ((.date | type) == "string") and
+              (.contributionCount | whole_nonnegative) and
+              (.contributionLevel as $level
+                | ["NONE", "FIRST_QUARTILE", "SECOND_QUARTILE", "THIRD_QUARTILE", "FOURTH_QUARTILE"]
+                | index($level) != null))))
+        | {total:$calendar.totalContributions, days:[$calendar.weeks[].contributionDays[] | {date:.date, count:.contributionCount, level:({"NONE":0,"FIRST_QUARTILE":1,"SECOND_QUARTILE":2,"THIRD_QUARTILE":3,"FOURTH_QUARTILE":4}[.contributionLevel])}]}
+        | select((.total | whole_nonnegative) and ((.days | type) == "array") and all(.days[]; ((.date | type) == "string") and (.count | whole_nonnegative) and ((.level | type) == "number") and .level >= 0 and .level <= 4))
+      ' >"$tmp/contributions.next" 2>/dev/null; then
+        printf '{"total":0,"days":[]}' >"$tmp/contributions.json"
+        printf '%s\n' 'contributions: invalid API response' >>"$warnings"
+      else
+        mv "$tmp/contributions.next" "$tmp/contributions.json"
+      fi
+    fi
+  fi
+fi
+
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
 repo_count=$(jq 'length' "$tmp/repos.json")
 if [[ $graphql_ok == false && $repo_count -eq 0 ]]; then state=error; message="GitHub repositories could not be loaded."; else state=ready; message=""; fi
 rate_remaining=$(jq -r '.remaining // 999999' "$tmp/rate.json")
 if { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } || grep -qiE 'rate.?limit|secondary rate' "$warnings"; then state=rate-limited; message="GitHub API rate limit reached."; fi
-jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],warnings:$warnings,rateLimit:$rate[0]}'
+jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --slurpfile contributions "$tmp/contributions.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],contributions:$contributions[0],warnings:$warnings,rateLimit:$rate[0]}'
