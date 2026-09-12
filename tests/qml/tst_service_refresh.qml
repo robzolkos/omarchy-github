@@ -194,6 +194,25 @@ TestCase {
     compare(Object.keys(service.hiddenNotifications).length, 0)
   }
 
+  function test_authoritative_refresh_can_redisplay_a_thread_updated_after_mark() {
+    completeInitialReady([notification("101")])
+    service.refresh()
+    var prepared = service.prepareMarkAllNotificationsRead()
+    service.markAllNotificationsRead(prepared)
+
+    fetchProcess().complete(0, payload("ready", "Ready", [notification("101")]), "")
+    compare(service.notifications.length, 0)
+    markProcess().complete(0, '{"state":"ready"}', "")
+
+    tryVerify(function() { return fetchProcess().running })
+    fetchProcess().complete(0, payload("ready", "Ready", [
+      notification("101", "2020-01-02T00:00:00Z")
+    ]), "")
+    compare(service.notifications.length, 1)
+    compare(service.notifications[0].id, "101")
+    compare(Object.keys(service.hiddenNotifications).length, 0)
+  }
+
   function test_fetch_revision_invalidates_prepared_bulk_mark() {
     completeInitialReady([notification("101")])
     service.refresh()

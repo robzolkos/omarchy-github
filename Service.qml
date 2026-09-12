@@ -57,6 +57,10 @@ Item {
     // in-flight refresh must not restore these rows, or the bar stays lit until
     // the next poll even though the user already opened or marked the thread.
     property var hiddenNotifications: ({})
+    // Successful marks stay hidden until any older in-flight fetch has applied.
+    // The next authoritative refresh then releases them so genuinely new
+    // activity on the same thread can become visible again.
+    property var pendingNotificationReconciliationIds: []
     property var markQueue: []
     // Single-thread and bulk marking share one process, so the panel gates every
     // entry point on this rather than on whichever flag a given call happens to
@@ -218,6 +222,28 @@ Item {
             restoreHiddenNotification(values[i]);
     }
 
+    function queueNotificationReconciliation(ids) {
+        var values = Array.isArray(ids) ? ids : [];
+        var pending = pendingNotificationReconciliationIds.slice();
+        for (var i = 0; i < values.length; i++) {
+            var id = String(values[i] || "");
+            if (id !== "" && pending.indexOf(id) === -1)
+                pending.push(id);
+        }
+        pendingNotificationReconciliationIds = pending;
+    }
+
+    function releasePendingNotificationReconciliation() {
+        if (pendingNotificationReconciliationIds.length === 0)
+            return ;
+
+        var hidden = copyMap(hiddenNotifications);
+        for (var i = 0; i < pendingNotificationReconciliationIds.length; i++)
+            delete hidden[pendingNotificationReconciliationIds[i]];
+        hiddenNotifications = hidden;
+        pendingNotificationReconciliationIds = [];
+    }
+
     function visibleNotifications(rows) {
         var incoming = Array.isArray(rows) ? rows : [];
         var hidden = hiddenNotifications || {};
@@ -272,6 +298,7 @@ Item {
             return ;
         }
         refreshQueued = false;
+        releasePendingNotificationReconciliation();
         loading = true;
         _stdout = "";
         _stderr = "";
@@ -473,6 +500,7 @@ Item {
             var all = root.markingAllNotifications;
             var markedId = root.markingNotificationId;
             if (exitCode === 0 && response && response.state === "ready") {
+                root.queueNotificationReconciliation(all ? root.markingAllNotificationIds : [markedId]);
                 root.notificationActionStatus = all ? "Notifications marked read. Refreshing…" : "Notification marked read. Refreshing…";
             } else {
                 var fallback = all ? "Could not mark all notifications read." : "Could not mark notification read.";
