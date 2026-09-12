@@ -30,8 +30,8 @@ assert_contains $'text: github.notificationActionStatus\n            textFormat:
   "notification action status is not forced to plain text"
 assert_contains $'return summary\n              }\n              textFormat: Text.PlainText' \
   "dashboard warning text is not forced to plain text"
-assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            // A ready snapshot is actionable even while a refresh runs. The\n            // two-click confirm still disarms if notificationsRevision changes.\n            actionEnabled: github.state === "ready"\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
-  "notification bulk action is not bound to the prepared displayed snapshot"
+assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            // Keep the displayed snapshot visible during refresh, but do not\n            // allow a destructive bulk action until that snapshot is current.\n            actionEnabled: github.state === "ready" && !github.loading\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
+  "notification bulk action is not disabled while its displayed snapshot is refreshing"
 assert_not_contains 'Refreshing dashboard' \
   "a ready summary is still replaced by Refreshing dashboard while a fetch runs"
 assert_contains $'meta: github.state === "ready" ?\n              github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"\n                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message' \

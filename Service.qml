@@ -358,11 +358,11 @@ Item {
         return milliseconds <= Date.now() ? text : "";
     }
 
-    // Capture the exact displayed boundary on the first click. The panel binds
-    // confirmation to notificationsRevision, so any refresh invalidates this
-    // prepared value before the destructive second click can run.
+    // Capture the exact displayed boundary on the first click. A refresh must
+    // finish before confirmation is prepared so unseen activity cannot be
+    // marked read from the older displayed snapshot.
     function prepareMarkAllNotificationsRead() {
-        if (notifications.length === 0 || markProcess.running)
+        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)
             return "";
 
         var boundary = "";
@@ -394,7 +394,7 @@ Item {
 
     function markAllNotificationsRead(prepared) {
         var confirmed = String(prepared || "");
-        if (confirmed === "" || markProcess.running)
+        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)
             return ;
 
         // Recompute immediately before starting. This protects non-panel callers

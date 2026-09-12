@@ -100,42 +100,51 @@ TestCase {
     compare(service.contributions.days.length, 1)
   }
 
-  function test_bulk_mark_can_prepare_and_start_during_fetch() {
+  function test_bulk_mark_waits_for_fetch_and_requires_fresh_confirmation() {
     completeInitialReady([notification("101")])
+    var preparedAtT0 = service.prepareMarkAllNotificationsRead()
+    verify(preparedAtT0 !== "")
+
     service.refresh()
     verify(fetchProcess().running)
+    compare(service.prepareMarkAllNotificationsRead(), "")
 
-    var prepared = service.prepareMarkAllNotificationsRead()
-    verify(prepared !== "")
-    service.markAllNotificationsRead(prepared)
+    service.markAllNotificationsRead(preparedAtT0)
+    compare(markProcess(), null)
+    compare(service.unreadCount, 1)
+
+    fetchProcess().complete(0, payload("ready", "Ready", [
+      notification("101", "2020-01-02T00:00:00Z")
+    ]), "")
+    service.markAllNotificationsRead(preparedAtT0)
+    compare(markProcess(), null)
+    compare(service.notificationActionStatus, "Notifications changed. Confirm again.")
+    compare(service.unreadCount, 1)
+
+    var preparedAtT1 = service.prepareMarkAllNotificationsRead()
+    verify(preparedAtT1 !== "")
+    verify(preparedAtT1 !== preparedAtT0)
+    service.markAllNotificationsRead(preparedAtT1)
 
     var marking = markProcess()
     verify(marking !== null)
     verify(marking.running)
-    verify(fetchProcess().running)
-    compare(service.unreadCount, 0)
     compare(marking.command, [
       service.helperPath(),
-      "--mark-all-read-before", "2020-01-01T00:00:00Z",
+      "--mark-all-read-before", "2020-01-02T00:00:00Z",
       "--mark-boundary-notification", "101"
     ])
   }
 
-  function test_fetch_finishing_before_mark_reconciles_hidden_rows() {
+  function test_successful_bulk_mark_reconciles_hidden_rows() {
     completeInitialReady([notification("101")])
-    service.refresh()
     var prepared = service.prepareMarkAllNotificationsRead()
     service.markAllNotificationsRead(prepared)
 
-    fetchProcess().complete(0, payload("ready", "Ready", [
-      notification("101"),
-      notification("202", "2020-01-02T00:00:00Z")
-    ]), "")
-    compare(service.notifications.length, 1)
-    compare(service.notifications[0].id, "202")
+    compare(service.notifications.length, 0)
     verify(service.hiddenNotifications["101"] !== undefined)
-
     markProcess().complete(0, '{"state":"ready"}', "")
+
     tryVerify(function() { return fetchProcess().running })
     fetchProcess().complete(0, payload("ready", "Ready", [notification("202", "2020-01-02T00:00:00Z")]), "")
     compare(service.notifications.length, 1)
@@ -143,24 +152,15 @@ TestCase {
     compare(Object.keys(service.hiddenNotifications).length, 0)
   }
 
-  function test_failed_mark_restores_fresh_hidden_rows_then_refreshes() {
+  function test_failed_bulk_mark_restores_rows_then_refreshes() {
     completeInitialReady([notification("101")])
-    service.refresh()
     var prepared = service.prepareMarkAllNotificationsRead()
     service.markAllNotificationsRead(prepared)
 
-    fetchProcess().complete(0, payload("ready", "Ready", [
-      {id: "101", updatedAt: "2020-01-01T00:00:00Z", title: "Fresh title"},
-      notification("202", "2020-01-02T00:00:00Z")
-    ]), "")
-    compare(service.notifications.length, 1)
-    compare(service.notifications[0].id, "202")
-
+    compare(service.notifications.length, 0)
     markProcess().complete(1, '{"state":"error","message":"Permission denied"}', "")
-    compare(service.notifications.length, 2)
+    compare(service.notifications.length, 1)
     compare(service.notifications[0].id, "101")
-    compare(service.notifications[0].title, "Fresh title")
-    compare(service.notifications[1].id, "202")
     compare(service.notificationActionStatus, "Permission denied")
 
     tryVerify(function() { return fetchProcess().running })
@@ -168,39 +168,34 @@ TestCase {
       {id: "101", updatedAt: "2020-01-01T00:00:00Z", title: "Fresh title"},
       notification("202", "2020-01-02T00:00:00Z")
     ]), "")
+    compare(service.notifications.length, 2)
+    compare(service.notifications[0].title, "Fresh title")
     compare(Object.keys(service.hiddenNotifications).length, 0)
   }
 
-  function test_mark_finishing_before_fetch_queues_authoritative_refresh() {
+  function test_refresh_waits_for_bulk_mark() {
     completeInitialReady([notification("101")])
-    service.refresh()
     var prepared = service.prepareMarkAllNotificationsRead()
     service.markAllNotificationsRead(prepared)
 
+    service.refresh()
+    compare(service.refreshQueued, true)
+    verify(!fetchProcess().running)
+
     markProcess().complete(0, '{"state":"ready"}', "")
-    tryCompare(service, "refreshQueued", true)
-    verify(fetchProcess().running)
-
-    fetchProcess().complete(0, payload("ready", "Ready", [
-      notification("101"),
-      notification("202", "2020-01-02T00:00:00Z")
-    ]), "")
     tryVerify(function() { return fetchProcess().running })
-    compare(service.notifications.length, 1)
-    compare(service.notifications[0].id, "202")
+    compare(service.refreshQueued, false)
 
-    fetchProcess().complete(0, payload("ready", "Ready", [notification("202", "2020-01-02T00:00:00Z")]), "")
+    fetchProcess().complete(0, payload("ready", "Ready", []), "")
     compare(service.loading, false)
     compare(Object.keys(service.hiddenNotifications).length, 0)
   }
 
   function test_authoritative_refresh_can_redisplay_a_thread_updated_after_mark() {
     completeInitialReady([notification("101")])
-    service.refresh()
     var prepared = service.prepareMarkAllNotificationsRead()
     service.markAllNotificationsRead(prepared)
 
-    fetchProcess().complete(0, payload("ready", "Ready", [notification("101")]), "")
     compare(service.notifications.length, 0)
     markProcess().complete(0, '{"state":"ready"}', "")
 
@@ -215,9 +210,9 @@ TestCase {
 
   function test_fetch_revision_invalidates_prepared_bulk_mark() {
     completeInitialReady([notification("101")])
-    service.refresh()
     var prepared = service.prepareMarkAllNotificationsRead()
     verify(prepared !== "")
+    service.refresh()
 
     fetchProcess().complete(0, payload("ready", "Ready", [
       notification("101"),

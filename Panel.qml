@@ -538,9 +538,9 @@ Panel {
             delegateComponent: notificationDelegate
             actionText: "Mark all read"
             actionBusyText: "Marking…"
-            // A ready snapshot is actionable even while a refresh runs. The
-            // two-click confirm still disarms if notificationsRevision changes.
-            actionEnabled: github.state === "ready"
+            // Keep the displayed snapshot visible during refresh, but do not
+            // allow a destructive bulk action until that snapshot is current.
+            actionEnabled: github.state === "ready" && !github.loading
             actionBusy: github.marking
             actionRevision: github.notificationsRevision
             actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }

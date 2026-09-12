@@ -46,16 +46,14 @@ assert_contains $'function canonicalNotificationTimestamp(value) {\n        var 
   "notification boundaries are not shape validated"
 assert_contains 'return milliseconds <= Date.now() ? text : "";' \
   "future notification boundaries are accepted"
-assert_contains $'function prepareMarkAllNotificationsRead() {\n        if (notifications.length === 0 || markProcess.running)\n            return "";' \
-  "bulk confirmation is still blocked during a dashboard refresh"
+assert_contains $'function prepareMarkAllNotificationsRead() {\n        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)\n            return "";' \
+  "bulk confirmation can be prepared during a dashboard refresh"
 assert_contains $'if (!/^\\d+$/.test(id)) {\n                notificationActionStatus = "Refresh before marking everything read.";' \
   "bulk confirmation accepts invalid boundary notification IDs"
 assert_contains 'return JSON.stringify({boundary: boundary, boundaryIds: boundaryIds, revision: notificationsRevision});' \
   "bulk confirmation does not capture its boundary IDs and revision"
-assert_contains $'function markAllNotificationsRead(prepared) {\n        var confirmed = String(prepared || "");\n        if (confirmed === "" || markProcess.running)\n            return ;' \
-  "bulk marking is still blocked during a dashboard refresh"
-assert_not_contains 'if (confirmed === "" || loading || fetchProcess.running || markProcess.running)' \
-  "bulk marking still waits for an in-flight fetch before it can start"
+assert_contains $'function markAllNotificationsRead(prepared) {\n        var confirmed = String(prepared || "");\n        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)\n            return ;' \
+  "bulk marking can start during a dashboard refresh"
 assert_contains $'if (confirmed !== prepareMarkAllNotificationsRead()) {\n            notificationActionStatus = "Notifications changed. Confirm again.";' \
   "bulk marking does not verify the confirmed snapshot"
 assert_contains $'var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];\n        for (var i = 0; i < snapshot.boundaryIds.length; i++)\n            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));' \
