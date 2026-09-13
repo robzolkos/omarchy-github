@@ -211,6 +211,7 @@ The shell watches local plugin files, making QML iteration fast.
 - Status-specific, paginated Actions requests prevent busy repositories from hiding active runs.
 - Completed runs are server-bounded to the configured failure window.
 - Independent requests allow successful sections to remain available when one endpoint fails.
+- After its persisted refresh gates, one `gh api --include /rate_limit` preflight reads core REST quota and server retry headers. A confirmed throttle without a server deadline uses a brief local retry guard, which is not shown as a GitHub reset time.
 
 Run the helper directly to inspect its JSON output:
 

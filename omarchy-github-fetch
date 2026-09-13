@@ -166,11 +166,11 @@ if [[ -z $mark_notification && -z $mark_all_before ]]; then
   }
 
   write_state() {
-    local next=$1 rate=$2 state_tmp
+    local next=$1 rate=$2 reset_known=$3 state_tmp
     state_tmp=$(mktemp "$cache_dir/.refresh-state.XXXXXX") || return 1
     chmod 600 "$state_tmp" || { rm -f "$state_tmp"; return 1; }
-    if ! jq -n --argjson next "$next" --argjson rate "$rate" \
-      '{schemaVersion:1,nextAutomaticAt:$next,rateLimitUntil:$rate}' >"$state_tmp"; then
+    if ! jq -n --argjson next "$next" --argjson rate "$rate" --argjson known "$reset_known" \
+      '{schemaVersion:1,nextAutomaticAt:$next,rateLimitUntil:$rate,rateLimitResetKnown:$known}' >"$state_tmp"; then
       rm -f "$state_tmp"; return 1
     fi
     mv -f "$state_tmp" "$state_file"
@@ -178,30 +178,31 @@ if [[ -z $mark_notification && -z $mark_all_before ]]; then
 
   next_automatic=0
   rate_until=0
+  rate_reset_known=false
   if [[ -f $state_file && $(wc -c <"$state_file") -le 4096 ]]; then
-    read -r next_automatic rate_until < <(jq -r '
+    read -r next_automatic rate_until rate_reset_known < <(jq -r '
       def epoch: type == "number" and . >= 0 and . <= 4102444800 and . == floor;
       if .schemaVersion == 1 and (.nextAutomaticAt | epoch) and (.rateLimitUntil | epoch)
-      then [.nextAutomaticAt,.rateLimitUntil] | @tsv else "0\t0" end
-    ' "$state_file" 2>/dev/null || printf '0\t0\n')
+      then [.nextAutomaticAt,.rateLimitUntil,(.rateLimitResetKnown == true)] | @tsv else "0\t0\tfalse" end
+    ' "$state_file" 2>/dev/null || printf '0\t0\tfalse\n')
   fi
   [[ $next_automatic =~ ^[0-9]+$ ]] || next_automatic=0
   [[ $rate_until =~ ^[0-9]+$ ]] || rate_until=0
+  [[ $rate_reset_known == true ]] || rate_reset_known=false
 
   emit_cached_status() {
-    local status=$1 text=$2 reset=$3
-    if cache_valid; then
-      jq --arg state "$status" --arg message "$text" --argjson reset "$reset" '
+    local status=$1 text=$2 reset=$3 reset_known=$4 source
+    if cache_valid; then source=$cache_file; else source=/dev/stdin; fi
+    { [[ $source != /dev/stdin ]] || emit_state "$status" "$text"; } |
+      jq --arg state "$status" --arg message "$text" --argjson reset "$reset" --argjson known "$reset_known" '
         .state=$state | .message=$message |
-        if $reset > 0 then .rateLimit=((.rateLimit // {}) + {resetAt:($reset|todateiso8601)}) else . end
-      ' "$cache_file"
-    else
-      emit_state "$status" "$text"
-    fi
+        if $known and $reset > 0 then .rateLimit=((.rateLimit // {}) + {resetAt:($reset|todateiso8601)})
+        else del(.rateLimit.resetAt) end
+      ' "$source"
   }
 
   if ((rate_until > now_epoch)); then
-    emit_cached_status rate-limited "GitHub API rate limit reached; refresh is paused until reset." "$rate_until"
+    emit_cached_status rate-limited "GitHub API rate limit reached; refresh is paused." "$rate_until" "$rate_reset_known"
     exit 0
   fi
   if [[ $automatic == true ]] && ((next_automatic > now_epoch)); then
@@ -212,7 +213,7 @@ if [[ -z $mark_notification && -z $mark_all_before ]]; then
   # Persist before credentials or the network are touched. If this process is
   # interrupted, recreation cannot immediately repeat its first scan.
   next_automatic=$((now_epoch + refresh_interval))
-  write_state "$next_automatic" 0 || { emit_state error "Could not record the next GitHub refresh."; exit 1; }
+  write_state "$next_automatic" 0 false || { emit_state error "Could not record the next GitHub refresh."; exit 1; }
 fi
 
 # `gh auth status` validates against GitHub and maps outages and rate limits to
@@ -279,6 +280,53 @@ fi
 trap 'rm -rf "$tmp"' EXIT
 warnings="$tmp/warnings"
 : >"$warnings"
+
+# Unlike ordinary `gh api` diagnostics, --include exposes the actual REST
+# response headers. Keep them separate from the JSON body so only server
+# evidence can set a displayed reset deadline.
+preflight_ok=true
+if ! gh api --include /rate_limit >"$tmp/preflight.response" 2>"$tmp/preflight.err"; then preflight_ok=false; fi
+tr -d '\r' <"$tmp/preflight.response" >"$tmp/preflight.normalized"
+awk '/^$/ { body=1; next } !body { print }' "$tmp/preflight.normalized" >"$tmp/preflight.headers"
+awk 'body { print } /^$/ { body=1 }' "$tmp/preflight.normalized" >"$tmp/preflight.json"
+preflight_status=$(sed -nE '1s/^HTTP\/[^ ]+ ([0-9]{3}).*/\1/p' "$tmp/preflight.headers")
+preflight_remaining=$(jq -r '.resources.core.remaining // empty' "$tmp/preflight.json" 2>/dev/null || :)
+preflight_reset=$(jq -r '.resources.core.reset // empty' "$tmp/preflight.json" 2>/dev/null || :)
+header_remaining=$(sed -nE 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]emaining:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p' "$tmp/preflight.headers" | tail -1)
+header_reset=$(sed -nE 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]eset:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p' "$tmp/preflight.headers" | tail -1)
+retry_after=$(sed -nE 's/^[Rr]etry-[Aa]fter:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p' "$tmp/preflight.headers" | tail -1)
+preflight_text=$(cat "$tmp/preflight.json" "$tmp/preflight.err")
+preflight_rate=false
+if [[ $preflight_status == 429 ]] ||
+   [[ $preflight_status == 403 && ( $header_remaining == 0 || $retry_after =~ ^[0-9]+$ || $preflight_text =~ [Rr]ate[[:space:]]limit ) ]] ||
+   [[ $preflight_remaining == 0 ]]; then
+  preflight_rate=true
+fi
+if [[ $preflight_status == 401 ]]; then
+  emit_state invalid-credentials "GitHub rejected the saved credentials. Sign in again with gh auth login."
+  exit 0
+elif [[ $preflight_rate == true ]]; then
+  rate_until=0
+  rate_reset_known=false
+  if [[ $preflight_remaining == 0 && $preflight_reset =~ ^[0-9]+$ ]]; then
+    rate_until=$preflight_reset; rate_reset_known=true
+  elif [[ $header_remaining == 0 && $header_reset =~ ^[0-9]+$ ]]; then
+    rate_until=$header_reset; rate_reset_known=true
+  elif [[ $retry_after =~ ^[0-9]+$ ]]; then
+    rate_until=$((now_epoch + retry_after)); rate_reset_known=true
+  fi
+  # If GitHub confirms throttling without a usable deadline, briefly suppress
+  # retries but do not present this local guard as a server-provided reset.
+  if ((rate_until <= now_epoch)); then rate_until=$((now_epoch + 60)); rate_reset_known=false; fi
+  write_state "$next_automatic" "$rate_until" "$rate_reset_known" || { emit_state error "Could not persist GitHub rate-limit backoff."; exit 1; }
+  emit_cached_status rate-limited "GitHub API rate limit reached; refresh is paused." "$rate_until" "$rate_reset_known"
+  exit 0
+elif [[ $preflight_ok == false || $preflight_status != 200 || ! $preflight_remaining =~ ^[0-9]+$ || ! $preflight_reset =~ ^[0-9]+$ ]]; then
+  detail=$(error_detail "$tmp/preflight.err")
+  emit_state error "${detail:-GitHub rate-limit status could not be checked.}"
+  exit 0
+fi
+
 api_error() {
   local label=$1 err=$2 detail
   detail=$(error_detail "$err")
@@ -486,30 +534,25 @@ jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --a
 
 if [[ $state == rate-limited ]]; then
   rate_until=0
+  rate_reset_known=false
   if [[ $graphql_rate_exhausted == true ]]; then
     rate_until=$(jq -r 'try (.resetAt | fromdateiso8601) catch 0' "$tmp/rate.json" 2>/dev/null || printf '0\n')
-    [[ $rate_until =~ ^[0-9]+$ ]] || rate_until=0
+    if [[ $rate_until =~ ^[0-9]+$ ]] && ((rate_until > now_epoch)); then rate_reset_known=true; else rate_until=0; fi
   fi
-  header_reset=$(sed -nE 's/.*[Xx]-[Rr]ate[Ll]imit-[Rr]eset[^0-9]*([0-9]+).*/\1/p' "$tmp/all-errors" | tail -1)
-  retry_after=$(sed -nE 's/.*[Rr]etry-[Aa]fter[^0-9]*([0-9]+).*/\1/p' "$tmp/all-errors" | tail -1)
-  if [[ $header_reset =~ ^[0-9]+$ ]] && ((header_reset > rate_until)); then rate_until=$header_reset; fi
-  if [[ $retry_after =~ ^[0-9]+$ ]] && ((now_epoch + retry_after > rate_until)); then rate_until=$((now_epoch + retry_after)); fi
-  # Confirmed throttling without a server reset still gets a short persisted
-  # guard, preventing a recreation loop while avoiding an invented long wait.
-  ((rate_until > now_epoch)) || rate_until=$((now_epoch + 60))
-  write_state "$next_automatic" "$rate_until" || { emit_state error "Could not persist GitHub rate-limit backoff."; exit 1; }
+  # A later REST failure has no response headers unless that request used
+  # --include. Persist a short local guard, but never display it as a reset.
+  if ((rate_until <= now_epoch)); then rate_until=$((now_epoch + 60)); rate_reset_known=false; fi
+  write_state "$next_automatic" "$rate_until" "$rate_reset_known" || { emit_state error "Could not persist GitHub rate-limit backoff."; exit 1; }
   if cache_valid; then
-    jq --arg message "$message" --argjson reset "$rate_until" --argjson graphqlExhausted "$graphql_rate_exhausted" --slurpfile response "$payload" '
+    jq --arg message "$message" --argjson reset "$rate_until" --argjson known "$rate_reset_known" --slurpfile response "$payload" '
       .state="rate-limited" | .message=$message |
-      .rateLimit=(if $graphqlExhausted then
-        ((.rateLimit // {}) + ($response[0].rateLimit // {}) + {resetAt:($reset|todateiso8601)})
-      else {resetAt:($reset|todateiso8601)} end)
+      .rateLimit=((.rateLimit // {}) + ($response[0].rateLimit // {})) |
+      if $known then .rateLimit.resetAt=($reset|todateiso8601) else del(.rateLimit.resetAt) end
     ' "$cache_file"
   else
-    jq --argjson reset "$rate_until" --argjson graphqlExhausted "$graphql_rate_exhausted" '
-      .rateLimit=(if $graphqlExhausted then
-        ((.rateLimit // {}) + {resetAt:($reset|todateiso8601)})
-      else {resetAt:($reset|todateiso8601)} end)
+    jq --argjson reset "$rate_until" --argjson known "$rate_reset_known" '
+      if $known then .rateLimit=((.rateLimit // {}) + {resetAt:($reset|todateiso8601)})
+      else del(.rateLimit.resetAt) end
     ' "$payload"
   fi
   exit 0

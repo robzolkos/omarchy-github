@@ -72,6 +72,10 @@ chmod +x "$sandbox/curl"
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == api && $2 == --include && $3 == /rate_limit ]]; then
+  printf '%s\n\n%s\n' 'HTTP/2.0 200 OK' '{"resources":{"core":{"remaining":5000,"reset":1893456000}}}'
+  exit 0
+fi
 if [[ $1 == api && $2 == --method && $3 == PATCH ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   id=${4##*/}
@@ -275,6 +279,10 @@ assert_jq '.state == "error"' "$fetch_setup_failed" "refresh setup failure repor
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
 if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == api && $2 == --include && $3 == /rate_limit ]]; then
+  printf '%s\n\n%s\n' 'HTTP/2.0 200 OK' '{"resources":{"core":{"remaining":5000,"reset":1893456000}}}'
+  exit 0
+fi
 if [[ $1 == api && $2 == graphql ]]; then
   printf '%s\n' "$*" >>"$GH_TEST_LOG"
   cat <<'JSON'

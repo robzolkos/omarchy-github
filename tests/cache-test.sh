@@ -28,17 +28,18 @@ fi
 [[ $1 == api ]] || exit 1
 if ! mkdir "$GH_GUARD" 2>/dev/null; then printf 'overlap\n' >>"$GH_TEST_LOG"; else trap 'rmdir "$GH_GUARD" 2>/dev/null || :' EXIT; fi
 [[ ${GH_SCENARIO:-} != concurrent ]] || sleep 0.08
+if [[ $2 == --include && $3 == /rate_limit ]]; then
+  case ${GH_SCENARIO:-ready} in
+    rate) printf 'HTTP/2.0 429 Too Many Requests\nX-RateLimit-Remaining: 42\nX-RateLimit-Reset: 2600\nRetry-After: 120\n\n{"message":"secondary rate limit"}\n'; exit 1 ;;
+    rate403) printf 'HTTP/2.0 403 Forbidden\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 2600\n\n{"message":"API rate limit exceeded"}\n'; exit 1 ;;
+    unauthorized) printf 'HTTP/2.0 401 Unauthorized\n\n{"message":"Bad credentials"}\n'; exit 1 ;;
+    transient) printf 'connection reset by peer\n' >&2; exit 1 ;;
+  esac
+  printf 'HTTP/2.0 200 OK\nX-RateLimit-Remaining: 42\nX-RateLimit-Reset: 1893456000\n\n{"resources":{"core":{"remaining":42,"reset":1893456000}}}\n'
+  exit 0
+fi
 case ${GH_SCENARIO:-ready} in
-  rate) printf 'HTTP 429: rate limit exceeded\nRetry-After: 120\n' >&2; exit 1 ;;
-  rate403) printf 'HTTP 403: API rate limit exceeded\nRetry-After: 120\n' >&2; exit 1 ;;
-  rest-rate)
-    if [[ $2 != graphql ]]; then
-      printf 'HTTP 429: secondary rate limit\nRetry-After: 120\n' >&2
-      exit 1
-    fi
-    ;;
-  unauthorized) printf 'HTTP 401: Bad credentials\n' >&2; exit 1 ;;
-  transient) printf 'connection reset by peer\n' >&2; exit 1 ;;
+  rest-rate) printf 'HTTP 429: secondary rate limit\n' >&2; exit 1 ;;
 esac
 if [[ $2 == graphql && $* == *author:@me* ]]; then
   printf '%s\n' '{"data":{"search":{"issueCount":0,"nodes":[]}}}'
@@ -80,27 +81,28 @@ for scenario in rate rate403 rest-rate unauthorized transient; do
   : >"$GH_TEST_LOG"
   result=$(OMARCHY_GITHUB_NOW=2000 run)
   case $scenario in
-    rate|rate403) assert_jq '.state == "rate-limited" and .rateLimit.resetAt == "1970-01-01T00:35:20Z"' "$result" "$scenario classification and Retry-After metadata" ;;
-    rest-rate) assert_jq '.state == "rate-limited" and .rateLimit == {"resetAt":"1970-01-01T00:35:20Z"}' "$result" "REST cooldown overrides healthy GraphQL quota" ;;
+    rate) assert_jq '.state == "rate-limited" and .rateLimit.resetAt == "1970-01-01T00:35:20Z"' "$result" "429 Retry-After deadline" ;;
+    rate403) assert_jq '.state == "rate-limited" and .rateLimit.resetAt == "1970-01-01T00:43:20Z"' "$result" "exact server reset deadline" ;;
+    rest-rate) assert_jq '.state == "rate-limited" and (.rateLimit.resetAt? == null)' "$result" "headerless REST failure hides the local fallback" ;;
     unauthorized) assert_jq '.state == "invalid-credentials"' "$result" "401 classification" ;;
     transient) assert_jq '.state == "error"' "$result" "transient classification" ;;
   esac
 done
+assert_jq '.rateLimitUntil == 2600 and .rateLimitResetKnown == true' "$(cat "$sandbox/cache-rate403/omarchy-github/refresh-state.json")" "exact server reset persistence"
+assert_jq '.rateLimitUntil == 2060 and .rateLimitResetKnown == false' "$(cat "$sandbox/cache-rest-rate/omarchy-github/refresh-state.json")" "undisplayed conservative fallback persistence"
 
-# The REST cooldown blocks both scan modes only through Retry-After, even when
-# the successful GraphQL request reports a different reset with quota left.
-export XDG_CACHE_HOME="$sandbox/cache-rest-rate" GH_SCENARIO=ready
+# The exact server deadline blocks both scan modes before credentials or API.
+export XDG_CACHE_HOME="$sandbox/cache-rate403" GH_SCENARIO=ready
 : >"$GH_TEST_LOG"
-blocked_auto=$(OMARCHY_GITHUB_NOW=2050 run --automatic --refresh-interval 300)
-[[ ! -s $GH_TEST_LOG ]] || fail "rate-blocked automatic refresh touched credentials or network"
-blocked_manual=$(OMARCHY_GITHUB_NOW=2050 run)
-assert_jq '.state == "rate-limited"' "$blocked_auto" "persisted automatic rate wait"
-assert_jq '.state == "rate-limited"' "$blocked_manual" "persisted manual rate wait"
-[[ $(api_count) -eq 0 && $(auth_count) -eq 0 ]] || fail "persisted rate wait touched credentials or network"
+blocked_auto=$(OMARCHY_GITHUB_NOW=2599 run --automatic --refresh-interval 300)
+blocked_manual=$(OMARCHY_GITHUB_NOW=2599 run)
+assert_jq '.state == "rate-limited" and .rateLimit.resetAt == "1970-01-01T00:43:20Z"' "$blocked_auto" "persisted automatic server reset"
+assert_jq '.state == "rate-limited" and .rateLimit.resetAt == "1970-01-01T00:43:20Z"' "$blocked_manual" "persisted manual server reset"
+[[ $(api_count) -eq 0 && $(auth_count) -eq 0 ]] || fail "persisted server reset touched credentials or API before expiry"
 : >"$GH_TEST_LOG"
-after_reset=$(OMARCHY_GITHUB_NOW=2121 run)
-assert_jq '.state == "ready"' "$after_reset" "manual refresh after rate expiry"
-[[ $(api_count) -gt 0 ]] || fail "rate wait remained active after expiry"
+after_reset=$(OMARCHY_GITHUB_NOW=2601 run)
+assert_jq '.state == "ready"' "$after_reset" "manual refresh after server reset"
+[[ $(api_count) -gt 0 ]] || fail "server reset remained active after expiry"
 
 # The next automatic attempt is durable before the first network call. Simulate
 # interruption during the first local token read, then recreate immediately.
