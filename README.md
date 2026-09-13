@@ -40,6 +40,7 @@ Repository search, metric filters, and sorting make even large GitHub accounts m
 - Omarchy Quattro with shell plugin support
 - [`gh`](https://cli.github.com/) on `PATH`
 - [`jq`](https://jqlang.github.io/jq/)
+- `flock` from util-linux; Omarchy includes it by default
 - [`curl`](https://curl.se/); Omarchy includes it by default
 - A Nerd Font; Omarchy includes one by default
 
@@ -185,6 +186,7 @@ From an existing checkout, validate and test the plugin:
 ```bash
 omarchy plugin validate .
 tests/helper-test.sh
+tests/cache-test.sh
 tests/panel-source-test.sh
 tests/service-source-test.sh
 ```
