@@ -271,8 +271,10 @@ Panel {
     }
   }
   onCursorTargetsChanged: ensureCursor()
+  onSettingsChanged: if (github.settingsReady) github.settings = root.settings
+  Component.onCompleted: github.initialize(root.settings)
 
-  Service { id: github; settings: root.settings }
+  Service { id: github }
 
   UrlLauncher {
     id: urlLauncher

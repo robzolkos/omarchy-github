@@ -17,6 +17,8 @@ failed_limit=20
 mark_notification=""
 mark_all_before=""
 mark_boundary_notifications=()
+automatic=false
+refresh_interval=900
 
 usage() {
   cat <<'EOF'
@@ -43,6 +45,8 @@ Usage: omarchy-github-fetch [options]
   --mark-boundary-notification ID
                                 Preserve same-second arrivals by marking only
                                 the fetched boundary thread ID (repeatable)
+  --automatic                   Honor cache freshness for a scheduled refresh
+  --refresh-interval N          Automatic refresh interval in seconds
 EOF
 }
 
@@ -65,6 +69,8 @@ while (($#)); do
     --mark-notification-read) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_notification=$2; shift 2 ;;
     --mark-all-read-before) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_all_before=$2; shift 2 ;;
     --mark-boundary-notification) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_boundary_notifications+=("$2"); shift 2 ;;
+    --automatic) automatic=true; shift ;;
+    --refresh-interval) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; refresh_interval=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -74,6 +80,7 @@ integer "$action_limit" && ((action_limit >= 1 && action_limit <= 500)) || { ech
 integer "$concurrency" && ((concurrency >= 1 && concurrency <= 12)) || { echo "invalid --concurrency" >&2; exit 2; }
 integer "$failed_days" && ((failed_days >= 1 && failed_days <= 30)) || { echo "invalid --failed-days" >&2; exit 2; }
 integer "$failed_limit" && ((failed_limit >= 1 && failed_limit <= 100)) || { echo "invalid --failed-limit" >&2; exit 2; }
+integer "$refresh_interval" && ((refresh_interval >= 60 && refresh_interval <= 3600)) || { echo "invalid --refresh-interval" >&2; exit 2; }
 [[ $action_scan == off || $action_scan == recent || $action_scan == all ]] || { echo "invalid --action-scan" >&2; exit 2; }
 [[ $repository_scope == owned || $repository_scope == organizations ]] || { echo "invalid --repository-scope" >&2; exit 2; }
 # Interpolated into the GraphQL document, so it comes from the validated enum
@@ -109,8 +116,112 @@ if [[ -n $mark_notification && -n $mark_all_before ]]; then
   jq -n '{state:"error",message:"Choose one notification marking operation."}'
   exit 2
 fi
+
 command -v gh >/dev/null 2>&1 || { emit_state gh-not-installed "GitHub CLI is not installed or not on PATH."; exit 0; }
-gh auth status -h github.com >/dev/null 2>&1 || { emit_state logged-out "Sign in with gh auth login to load GitHub data."; exit 0; }
+credential_checked=false
+# Mutations preserve their existing immediate credential feedback. Full reads
+# defer even this local lookup until after their shared lock and persisted
+# scheduling checks.
+if [[ -n $mark_notification || -n $mark_all_before ]]; then
+  if ! gh auth token -h github.com >/dev/null 2>&1; then
+    emit_state logged-out "Sign in with gh auth login to load GitHub data."
+    exit 0
+  fi
+  credential_checked=true
+fi
+
+# Full dashboard scans share a private cache and lock. Notification mutations
+# intentionally skip this block: freshness and rate backoff govern reads only.
+cache_dir=""
+cache_file=""
+state_file=""
+now_epoch=""
+if [[ -z $mark_notification && -z $mark_all_before ]]; then
+  command -v flock >/dev/null 2>&1 || { emit_state error "flock is required for GitHub refresh serialization."; exit 1; }
+  cache_dir="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/omarchy-github"
+  if ! mkdir -p "$cache_dir" || ! chmod 700 "$cache_dir"; then
+    emit_state error "Could not prepare private GitHub cache storage."
+    exit 1
+  fi
+  cache_file="$cache_dir/dashboard.json"
+  state_file="$cache_dir/refresh-state.json"
+  : >"$cache_dir/refresh.lock" || { emit_state error "Could not prepare the GitHub refresh lock."; exit 1; }
+  chmod 600 "$cache_dir/refresh.lock" || { emit_state error "Could not protect the GitHub refresh lock."; exit 1; }
+  exec {refresh_lock_fd}>"$cache_dir/refresh.lock"
+  flock "$refresh_lock_fd" || { emit_state error "Could not lock the GitHub refresh cache."; exit 1; }
+
+  now_epoch=${OMARCHY_GITHUB_NOW:-$(date +%s)}
+  [[ $now_epoch =~ ^[0-9]+$ ]] && ((now_epoch <= 4102444800)) || { emit_state error "Invalid refresh clock."; exit 1; }
+
+  cache_valid() {
+    local candidate=${1:-$cache_file}
+    [[ -f $candidate ]] || return 1
+    [[ $(wc -c <"$candidate") -le 5242880 ]] || return 1
+    jq -e '
+      .schemaVersion == 1 and .state == "ready" and
+      ([.notifications,.reviewRequests,.assignedIssues,.myPullRequests,.actions,.failedActions,.repositories,.warnings] | all(type == "array" and length <= 10000)) and
+      (.contributions | type == "object") and (.contributions.days | type == "array" and length <= 371) and
+      (.login | type == "string" and length <= 256) and (.fetchedAt | type == "string" and length <= 64)
+    ' "$candidate" >/dev/null 2>&1
+  }
+
+  write_state() {
+    local next=$1 rate=$2 state_tmp
+    state_tmp=$(mktemp "$cache_dir/.refresh-state.XXXXXX") || return 1
+    chmod 600 "$state_tmp" || { rm -f "$state_tmp"; return 1; }
+    if ! jq -n --argjson next "$next" --argjson rate "$rate" \
+      '{schemaVersion:1,nextAutomaticAt:$next,rateLimitUntil:$rate}' >"$state_tmp"; then
+      rm -f "$state_tmp"; return 1
+    fi
+    mv -f "$state_tmp" "$state_file"
+  }
+
+  next_automatic=0
+  rate_until=0
+  if [[ -f $state_file && $(wc -c <"$state_file") -le 4096 ]]; then
+    read -r next_automatic rate_until < <(jq -r '
+      def epoch: type == "number" and . >= 0 and . <= 4102444800 and . == floor;
+      if .schemaVersion == 1 and (.nextAutomaticAt | epoch) and (.rateLimitUntil | epoch)
+      then [.nextAutomaticAt,.rateLimitUntil] | @tsv else "0\t0" end
+    ' "$state_file" 2>/dev/null || printf '0\t0\n')
+  fi
+  [[ $next_automatic =~ ^[0-9]+$ ]] || next_automatic=0
+  [[ $rate_until =~ ^[0-9]+$ ]] || rate_until=0
+
+  emit_cached_status() {
+    local status=$1 text=$2 reset=$3
+    if cache_valid; then
+      jq --arg state "$status" --arg message "$text" --argjson reset "$reset" '
+        .state=$state | .message=$message |
+        if $reset > 0 then .rateLimit=((.rateLimit // {}) + {resetAt:($reset|todateiso8601)}) else . end
+      ' "$cache_file"
+    else
+      emit_state "$status" "$text"
+    fi
+  }
+
+  if ((rate_until > now_epoch)); then
+    emit_cached_status rate-limited "GitHub API rate limit reached; refresh is paused until reset." "$rate_until"
+    exit 0
+  fi
+  if [[ $automatic == true ]] && ((next_automatic > now_epoch)); then
+    if cache_valid; then cat "$cache_file"; else emit_state waiting "GitHub refresh is deferred until the next interval."; fi
+    exit 0
+  fi
+
+  # Persist before credentials or the network are touched. If this process is
+  # interrupted, recreation cannot immediately repeat its first scan.
+  next_automatic=$((now_epoch + refresh_interval))
+  write_state "$next_automatic" 0 || { emit_state error "Could not record the next GitHub refresh."; exit 1; }
+fi
+
+# `gh auth status` validates against GitHub and maps outages and rate limits to
+# logged-out. Reading the local token is enough to decide whether credentials
+# exist; API response evidence below decides whether they are usable.
+if [[ $credential_checked == false ]] && ! gh auth token -h github.com >/dev/null 2>&1; then
+  emit_state logged-out "Sign in with gh auth login to load GitHub data."
+  exit 0
+fi
 
 error_detail() {
   tr '\n' ' ' <"$1" |
@@ -353,6 +464,53 @@ fi
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
 repo_count=$(jq 'length' "$tmp/repos.json")
 if [[ $graphql_ok == false && $repo_count -eq 0 ]]; then state=error; message="GitHub repositories could not be loaded."; else state=ready; message=""; fi
+
+# Classify only response evidence. In particular, a local token plus an HTTP
+# failure is never reported as logged-out. A plain 403 may be permissions, so
+# it is rate-limited only when the response also says so.
+find "$tmp" -type f -name '*.err' -exec cat {} + >"$tmp/all-errors" 2>/dev/null || :
 rate_remaining=$(jq -r '.remaining // 999999' "$tmp/rate.json")
-if { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } || grep -qiE 'rate.?limit|secondary rate' "$warnings"; then state=rate-limited; message="GitHub API rate limit reached."; fi
-jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --slurpfile contributions "$tmp/contributions.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],contributions:$contributions[0],warnings:$warnings,rateLimit:$rate[0]}'
+if grep -qiE 'HTTP[^0-9]*401|status[^0-9]*401' "$tmp/all-errors"; then
+  state=invalid-credentials
+  message="GitHub rejected the saved credentials. Sign in again with gh auth login."
+elif { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } ||
+     grep -qiE 'HTTP[^0-9]*429|status[^0-9]*429|rate limit (exceeded|reached)|secondary rate limit|x-ratelimit-remaining[^0-9]*0' "$tmp/all-errors"; then
+  state=rate-limited
+  message="GitHub API rate limit reached."
+fi
+
+payload="$tmp/payload.json"
+jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --slurpfile contributions "$tmp/contributions.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],contributions:$contributions[0],warnings:$warnings,rateLimit:$rate[0]}' >"$payload"
+
+if [[ $state == rate-limited ]]; then
+  rate_until=$(jq -r 'try (.resetAt | fromdateiso8601) catch 0' "$tmp/rate.json" 2>/dev/null || printf '0\n')
+  [[ $rate_until =~ ^[0-9]+$ ]] || rate_until=0
+  header_reset=$(sed -nE 's/.*[Xx]-[Rr]ate[Ll]imit-[Rr]eset[^0-9]*([0-9]+).*/\1/p' "$tmp/all-errors" | tail -1)
+  retry_after=$(sed -nE 's/.*[Rr]etry-[Aa]fter[^0-9]*([0-9]+).*/\1/p' "$tmp/all-errors" | tail -1)
+  if [[ $header_reset =~ ^[0-9]+$ ]] && ((header_reset > rate_until)); then rate_until=$header_reset; fi
+  if [[ $retry_after =~ ^[0-9]+$ ]] && ((now_epoch + retry_after > rate_until)); then rate_until=$((now_epoch + retry_after)); fi
+  # Confirmed throttling without a server reset still gets a short persisted
+  # guard, preventing a recreation loop while avoiding an invented long wait.
+  ((rate_until > now_epoch)) || rate_until=$((now_epoch + 60))
+  write_state "$next_automatic" "$rate_until" || { emit_state error "Could not persist GitHub rate-limit backoff."; exit 1; }
+  if cache_valid; then
+    jq --arg message "$message" --argjson reset "$rate_until" --slurpfile response "$payload" '
+      .state="rate-limited" | .message=$message |
+      .rateLimit=((.rateLimit // {}) + ($response[0].rateLimit // {}) + {resetAt:($reset|todateiso8601)})
+    ' "$cache_file"
+  else
+    jq --argjson reset "$rate_until" '.rateLimit=((.rateLimit // {}) + {resetAt:($reset|todateiso8601)})' "$payload"
+  fi
+  exit 0
+fi
+
+if [[ $state == ready ]] && cache_valid "$payload"; then
+  cache_tmp=$(mktemp "$cache_dir/.dashboard.XXXXXX") || { cat "$payload"; exit 0; }
+  chmod 600 "$cache_tmp" || { rm -f "$cache_tmp"; cat "$payload"; exit 0; }
+  if cp "$payload" "$cache_tmp" && mv -f "$cache_tmp" "$cache_file"; then
+    chmod 600 "$cache_file"
+  else
+    rm -f "$cache_tmp"
+  fi
+fi
+cat "$payload"

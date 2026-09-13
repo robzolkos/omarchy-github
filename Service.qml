@@ -47,6 +47,7 @@ Item {
     property string _stdout: ""
     property string _stderr: ""
     property bool refreshQueued: false
+    property bool refreshQueuedAutomatic: false
     property string markingNotificationId: ""
     property bool markingAllNotifications: false
     property var markingAllNotificationIds: []
@@ -138,8 +139,11 @@ Item {
         return decodeURIComponent(Qt.resolvedUrl("omarchy-github-fetch").toString().replace(/^file:\/\//, ""));
     }
 
-    function command() {
-        return [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--include-contributions", includeContributions ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+    function command(automatic) {
+        var argv = [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--include-contributions", includeContributions ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+        if (automatic)
+            argv = argv.concat(["--automatic", "--refresh-interval", String(refreshIntervalSec)]);
+        return argv;
     }
 
     function copyMap(value) {
@@ -292,39 +296,66 @@ Item {
         return true;
     }
 
-    function refresh() {
+    function initialize(initialSettings) {
+        if (settingsReady)
+            return ;
+        settings = initialSettings || {};
+        settingsReady = true;
+        automaticRefresh();
+    }
+
+    function startRefresh(automatic) {
+        if (!settingsReady)
+            return ;
         if (fetchProcess.running || markProcess.running || markQueue.length > 0) {
+            if (!refreshQueued)
+                refreshQueuedAutomatic = automatic;
+            else if (!automatic)
+                refreshQueuedAutomatic = false;
             refreshQueued = true;
             return ;
         }
         refreshQueued = false;
+        refreshQueuedAutomatic = false;
         releasePendingNotificationReconciliation();
         loading = true;
         _stdout = "";
         _stderr = "";
-        fetchProcess.command = command();
+        fetchProcess.command = command(automatic);
         fetchProcess.running = true;
+    }
+
+    function refresh() {
+        startRefresh(false);
+    }
+
+    function automaticRefresh() {
+        startRefresh(true);
     }
 
     function apply(raw) {
         try {
             var data = JSON.parse(String(raw || ""));
-            state = String(data.state || "error");
+            var incomingState = String(data.state || "error");
+            var preserveReadyDashboard = incomingState === "rate-limited" && fetchedAt !== "";
+            state = incomingState;
             message = String(data.message || "");
-            login = String(data.login || "");
-            fetchedRepositoryScope = String(data.repositoryScope || "owned");
-            fetchedAt = String(data.fetchedAt || "");
-            notifications = visibleNotifications(data.notifications);
-            notificationsRevision++;
-            reviewRequests = Array.isArray(data.reviewRequests) ? data.reviewRequests : [];
-            assignedIssues = Array.isArray(data.assignedIssues) ? data.assignedIssues : [];
-            myPullRequests = Array.isArray(data.myPullRequests) ? data.myPullRequests : [];
-            myPullRequestsTotal = Number(data.myPullRequestsTotal) || myPullRequests.length;
-            actions = Array.isArray(data.actions) ? data.actions : [];
-            failedActions = Array.isArray(data.failedActions) ? data.failedActions : [];
-            repositories = Array.isArray(data.repositories) ? data.repositories : [];
-            contributions = data.contributions && Array.isArray(data.contributions.days) ? data.contributions : {total: 0, days: []};
-            warnings = Array.isArray(data.warnings) ? data.warnings : [];
+            if (!preserveReadyDashboard) {
+                login = String(data.login || "");
+                fetchedRepositoryScope = String(data.repositoryScope || "owned");
+                fetchedAt = String(data.fetchedAt || "");
+                notifications = visibleNotifications(data.notifications);
+                notificationsRevision++;
+                reviewRequests = Array.isArray(data.reviewRequests) ? data.reviewRequests : [];
+                assignedIssues = Array.isArray(data.assignedIssues) ? data.assignedIssues : [];
+                myPullRequests = Array.isArray(data.myPullRequests) ? data.myPullRequests : [];
+                myPullRequestsTotal = Number(data.myPullRequestsTotal) || myPullRequests.length;
+                actions = Array.isArray(data.actions) ? data.actions : [];
+                failedActions = Array.isArray(data.failedActions) ? data.failedActions : [];
+                repositories = Array.isArray(data.repositories) ? data.repositories : [];
+                contributions = data.contributions && Array.isArray(data.contributions.days) ? data.contributions : {total: 0, days: []};
+                warnings = Array.isArray(data.warnings) ? data.warnings : [];
+            }
             rateLimit = data.rateLimit || null;
         } catch (error) {
             state = "error";
@@ -428,14 +459,12 @@ Item {
     }
 
     visible: false
-    Component.onCompleted: settingsReady = true
 
     Timer {
         interval: root.refreshIntervalSec * 1000
         repeat: true
-        running: true
-        triggeredOnStart: true
-        onTriggered: root.refresh()
+        running: root.settingsReady
+        onTriggered: root.automaticRefresh()
     }
 
     Timer {
@@ -465,8 +494,10 @@ Item {
                 return ;
 
             if (root.refreshQueued) {
+                var automatic = root.refreshQueuedAutomatic;
                 root.refreshQueued = false;
-                Qt.callLater(root.refresh);
+                root.refreshQueuedAutomatic = false;
+                Qt.callLater(function() { root.startRefresh(automatic); });
             }
         }
 
