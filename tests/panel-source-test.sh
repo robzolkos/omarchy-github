@@ -34,7 +34,7 @@ assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Mark
   "notification bulk action is not disabled while its displayed snapshot is refreshing"
 assert_not_contains 'Refreshing dashboard' \
   "a ready summary is still replaced by Refreshing dashboard while a fetch runs"
-assert_contains $'meta: github.state === "ready" ?\n              github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"\n                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message' \
+assert_contains $'meta: github.state === "ready" ?\n              github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"\n                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : root.statusMessage()' \
   "the hero summary is still gated on loading rather than the last ready snapshot"
 assert_contains $'width: Style.space(22)\n                  height: Style.space(22)\n                  opacity: github.loading ? 1 : 0' \
   "the refresh spinner still collapses and shifts the gear"

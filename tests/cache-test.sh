@@ -31,6 +31,12 @@ if ! mkdir "$GH_GUARD" 2>/dev/null; then printf 'overlap\n' >>"$GH_TEST_LOG"; el
 case ${GH_SCENARIO:-ready} in
   rate) printf 'HTTP 429: rate limit exceeded\nRetry-After: 120\n' >&2; exit 1 ;;
   rate403) printf 'HTTP 403: API rate limit exceeded\nRetry-After: 120\n' >&2; exit 1 ;;
+  rest-rate)
+    if [[ $2 != graphql ]]; then
+      printf 'HTTP 429: secondary rate limit\nRetry-After: 120\n' >&2
+      exit 1
+    fi
+    ;;
   unauthorized) printf 'HTTP 401: Bad credentials\n' >&2; exit 1 ;;
   transient) printf 'connection reset by peer\n' >&2; exit 1 ;;
 esac
@@ -69,20 +75,21 @@ assert_jq '.state == "ready"' "$manual" "manual freshness bypass"
 [[ $(api_count) -gt 0 ]] || fail "manual refresh did not bypass ordinary freshness"
 
 # Confirmed response classes stay distinct from missing local credentials.
-for scenario in rate rate403 unauthorized transient; do
+for scenario in rate rate403 rest-rate unauthorized transient; do
   export XDG_CACHE_HOME="$sandbox/cache-$scenario" GH_SCENARIO=$scenario
   : >"$GH_TEST_LOG"
   result=$(OMARCHY_GITHUB_NOW=2000 run)
   case $scenario in
     rate|rate403) assert_jq '.state == "rate-limited" and .rateLimit.resetAt == "1970-01-01T00:35:20Z"' "$result" "$scenario classification and Retry-After metadata" ;;
+    rest-rate) assert_jq '.state == "rate-limited" and .rateLimit == {"resetAt":"1970-01-01T00:35:20Z"}' "$result" "REST cooldown overrides healthy GraphQL quota" ;;
     unauthorized) assert_jq '.state == "invalid-credentials"' "$result" "401 classification" ;;
     transient) assert_jq '.state == "error"' "$result" "transient classification" ;;
   esac
 done
 
-# Persisted rate wait blocks both scan modes. Automatic mode also avoids the
-# local credential lookup, while manual mode may perform that lookup only.
-export XDG_CACHE_HOME="$sandbox/cache-rate" GH_SCENARIO=ready
+# The REST cooldown blocks both scan modes only through Retry-After, even when
+# the successful GraphQL request reports a different reset with quota left.
+export XDG_CACHE_HOME="$sandbox/cache-rest-rate" GH_SCENARIO=ready
 : >"$GH_TEST_LOG"
 blocked_auto=$(OMARCHY_GITHUB_NOW=2050 run --automatic --refresh-interval 300)
 [[ ! -s $GH_TEST_LOG ]] || fail "rate-blocked automatic refresh touched credentials or network"

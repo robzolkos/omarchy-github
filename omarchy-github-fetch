@@ -470,10 +470,12 @@ if [[ $graphql_ok == false && $repo_count -eq 0 ]]; then state=error; message="G
 # it is rate-limited only when the response also says so.
 find "$tmp" -type f -name '*.err' -exec cat {} + >"$tmp/all-errors" 2>/dev/null || :
 rate_remaining=$(jq -r '.remaining // 999999' "$tmp/rate.json")
+graphql_rate_exhausted=false
+if [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining == 0)); then graphql_rate_exhausted=true; fi
 if grep -qiE 'HTTP[^0-9]*401|status[^0-9]*401' "$tmp/all-errors"; then
   state=invalid-credentials
   message="GitHub rejected the saved credentials. Sign in again with gh auth login."
-elif { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } ||
+elif [[ $graphql_rate_exhausted == true ]] ||
      grep -qiE 'HTTP[^0-9]*429|status[^0-9]*429|rate limit (exceeded|reached)|secondary rate limit|x-ratelimit-remaining[^0-9]*0' "$tmp/all-errors"; then
   state=rate-limited
   message="GitHub API rate limit reached."
@@ -483,8 +485,11 @@ payload="$tmp/payload.json"
 jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --slurpfile contributions "$tmp/contributions.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],contributions:$contributions[0],warnings:$warnings,rateLimit:$rate[0]}' >"$payload"
 
 if [[ $state == rate-limited ]]; then
-  rate_until=$(jq -r 'try (.resetAt | fromdateiso8601) catch 0' "$tmp/rate.json" 2>/dev/null || printf '0\n')
-  [[ $rate_until =~ ^[0-9]+$ ]] || rate_until=0
+  rate_until=0
+  if [[ $graphql_rate_exhausted == true ]]; then
+    rate_until=$(jq -r 'try (.resetAt | fromdateiso8601) catch 0' "$tmp/rate.json" 2>/dev/null || printf '0\n')
+    [[ $rate_until =~ ^[0-9]+$ ]] || rate_until=0
+  fi
   header_reset=$(sed -nE 's/.*[Xx]-[Rr]ate[Ll]imit-[Rr]eset[^0-9]*([0-9]+).*/\1/p' "$tmp/all-errors" | tail -1)
   retry_after=$(sed -nE 's/.*[Rr]etry-[Aa]fter[^0-9]*([0-9]+).*/\1/p' "$tmp/all-errors" | tail -1)
   if [[ $header_reset =~ ^[0-9]+$ ]] && ((header_reset > rate_until)); then rate_until=$header_reset; fi
@@ -494,12 +499,18 @@ if [[ $state == rate-limited ]]; then
   ((rate_until > now_epoch)) || rate_until=$((now_epoch + 60))
   write_state "$next_automatic" "$rate_until" || { emit_state error "Could not persist GitHub rate-limit backoff."; exit 1; }
   if cache_valid; then
-    jq --arg message "$message" --argjson reset "$rate_until" --slurpfile response "$payload" '
+    jq --arg message "$message" --argjson reset "$rate_until" --argjson graphqlExhausted "$graphql_rate_exhausted" --slurpfile response "$payload" '
       .state="rate-limited" | .message=$message |
-      .rateLimit=((.rateLimit // {}) + ($response[0].rateLimit // {}) + {resetAt:($reset|todateiso8601)})
+      .rateLimit=(if $graphqlExhausted then
+        ((.rateLimit // {}) + ($response[0].rateLimit // {}) + {resetAt:($reset|todateiso8601)})
+      else {resetAt:($reset|todateiso8601)} end)
     ' "$cache_file"
   else
-    jq --argjson reset "$rate_until" '.rateLimit=((.rateLimit // {}) + {resetAt:($reset|todateiso8601)})' "$payload"
+    jq --argjson reset "$rate_until" --argjson graphqlExhausted "$graphql_rate_exhausted" '
+      .rateLimit=(if $graphqlExhausted then
+        ((.rateLimit // {}) + {resetAt:($reset|todateiso8601)})
+      else {resetAt:($reset|todateiso8601)} end)
+    ' "$payload"
   fi
   exit 0
 fi
