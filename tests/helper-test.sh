@@ -23,6 +23,7 @@ if "$HELPER" --mark-all-read-before 2020-01-03T00:00:00Z --mark-boundary-notific
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT
+export XDG_CACHE_HOME="$sandbox/cache"
 export GH_TEST_LOG="$sandbox/gh-calls"
 : >"$GH_TEST_LOG"
 ln -s "$(command -v jq)" "$sandbox/jq"
@@ -36,7 +37,7 @@ if [[ $1 == auth ]]; then exit 1; fi
 exit 1
 GH
 chmod +x "$sandbox/gh"
-out=$(PATH="$sandbox" "$HELPER")
+out=$(PATH="$sandbox:$PATH" "$HELPER")
 assert_jq '.state == "logged-out" and (.repositories|length) == 0' "$out" "logged-out state"
 
 cat >"$sandbox/curl" <<'CURL'
@@ -182,6 +183,7 @@ assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and
 contribution_rate=$(CURL_FAIL_CONTRIBUTIONS=true GH_CONTRIBUTION_RATE=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
 assert_jq '.rateLimit.remaining == 0 and .rateLimit.cost == 1 and .state == "rate-limited"' "$contribution_rate" "contribution API fallback updates the displayed rate limit"
 grep -q 'contributionsCollection.*rateLimit.*remaining' "$GH_TEST_LOG" || fail "contribution fallback did not request the final rate limit"
+rm -f "$XDG_CACHE_HOME/omarchy-github/refresh-state.json"
 assert_jq '(.myPullRequests|length == 2) and (.myPullRequests[0].id == "octocat/hello#7") and (.myPullRequests[0].checks == "FAILURE")' "$out" "authored pull requests with check rollup"
 assert_jq '(.myPullRequests[1].checks == "NONE") and (.myPullRequests[1].draft == true)' "$out" "missing rollup falls back to NONE"
 assert_jq '.myPullRequestsTotal == 2' "$out" "authored pull request total reported"

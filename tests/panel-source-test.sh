@@ -60,6 +60,8 @@ assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationI
   "clicking a notification does not open and mark it read"
 assert_contains $'function openUrl(url) {\n    var accepted = urlLauncher.openUrl(url)\n    if (accepted) close()\n    return accepted\n  }' \
   "the panel does not return the URL policy result after conditionally closing"
+assert_contains $'onSettingsChanged: if (github.settingsReady) github.settings = root.settings\n  Component.onCompleted: github.initialize(root.settings)\n\n  Service { id: github }' \
+  "panel does not inject host settings before explicitly starting the service"
 assert_contains $'UrlLauncher {\n    id: urlLauncher\n    linkBehavior: github.linkBehavior\n    // Both launchers receive an argv array; no URL is interpreted by a shell.\n    onBrowserLaunchRequested: function(argv) { Util.execArgv(argv) }\n    onWebAppLaunchRequested: function(argv) { Quickshell.execDetached(argv) }' \
   "the open-links setting does not choose argv-safe browser and web app launchers"
 
