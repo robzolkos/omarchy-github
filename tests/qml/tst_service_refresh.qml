@@ -21,10 +21,11 @@ TestCase {
     }
   }
 
-  function payload(state, message, notifications, contributions) {
+  function payload(state, message, notifications, contributions, preserveDashboard) {
     return JSON.stringify({
       state: state,
       message: message,
+      preserveDashboard: preserveDashboard === true,
       login: "octocat",
       repositoryScope: "owned",
       fetchedAt: "2020-01-01T00:00:00Z",
@@ -269,13 +270,22 @@ TestCase {
     compare(service.rateLimit.remaining, 0)
   }
 
-  function test_rate_limit_preserves_last_ready_dashboard() {
+  function test_rate_limit_preserves_matching_ready_dashboard() {
+    completeInitialReady([notification("101")])
+    service.refresh()
+    fetchProcess().complete(0, payload("rate-limited", "Wait for reset", [], undefined, true), "")
+    compare(service.state, "rate-limited")
+    compare(service.notifications.length, 1)
+    compare(service.notifications[0].id, "101")
+    compare(service.repositories.length, 1)
+  }
+
+  function test_rate_limit_replaces_incompatible_ready_dashboard() {
     completeInitialReady([notification("101")])
     service.refresh()
     fetchProcess().complete(0, payload("rate-limited", "Wait for reset", []), "")
     compare(service.state, "rate-limited")
-    compare(service.notifications.length, 1)
-    compare(service.notifications[0].id, "101")
+    compare(service.notifications.length, 0)
     compare(service.repositories.length, 1)
   }
 }

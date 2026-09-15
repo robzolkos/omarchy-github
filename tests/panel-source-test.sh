@@ -60,8 +60,12 @@ assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationI
   "clicking a notification does not open and mark it read"
 assert_contains $'function openUrl(url) {\n    var accepted = urlLauncher.openUrl(url)\n    if (accepted) close()\n    return accepted\n  }' \
   "the panel does not return the URL policy result after conditionally closing"
-assert_contains $'onSettingsChanged: if (github.settingsReady) github.settings = root.settings\n  Component.onCompleted: github.initialize(root.settings)\n\n  Service { id: github }' \
-  "panel does not inject host settings before explicitly starting the service"
+assert_contains $'function applyHostSettings() {\n    // The plugin loader assigns bar before settings. Waiting for that host\n    // injection prevents a startup refresh from using the panel defaults.\n    if (!bar) return\n    if (github.settingsReady)\n      github.settings = root.settings\n    else\n      github.initialize(root.settings)\n  }' \
+  "panel does not wait for host settings before starting the service"
+assert_contains $'onSettingsChanged: applyHostSettings()\n  onBarChanged: if (bar) Qt.callLater(applyHostSettings)' \
+  "panel does not initialize for either host property injection order"
+assert_not_contains 'Component.onCompleted: github.initialize(root.settings)' \
+  "panel still starts a default-policy refresh before host settings arrive"
 assert_contains $'UrlLauncher {\n    id: urlLauncher\n    linkBehavior: github.linkBehavior\n    // Both launchers receive an argv array; no URL is interpreted by a shell.\n    onBrowserLaunchRequested: function(argv) { Util.execArgv(argv) }\n    onWebAppLaunchRequested: function(argv) { Quickshell.execDetached(argv) }' \
   "the open-links setting does not choose argv-safe browser and web app launchers"
 

@@ -71,7 +71,7 @@ chmod +x "$sandbox/curl"
 
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
-if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == auth ]]; then printf '%s\n' 'ghp_test_token_for_cache_identity_1234567890'; exit 0; fi
 if [[ $1 == api && $2 == --include && $3 == /rate_limit ]]; then
   printf '%s\n\n%s\n' 'HTTP/2.0 200 OK' '{"resources":{"core":{"remaining":5000,"reset":1893456000}}}'
   exit 0
@@ -278,7 +278,7 @@ assert_jq '.state == "error"' "$fetch_setup_failed" "refresh setup failure repor
 # instead of the API's own explanation.
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
-if [[ $1 == auth ]]; then exit 0; fi
+if [[ $1 == auth ]]; then printf '%s\n' 'ghp_test_token_for_cache_identity_1234567890'; exit 0; fi
 if [[ $1 == api && $2 == --include && $3 == /rate_limit ]]; then
   printf '%s\n\n%s\n' 'HTTP/2.0 200 OK' '{"resources":{"core":{"remaining":5000,"reset":1893456000}}}'
   exit 0

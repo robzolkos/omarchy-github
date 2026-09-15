@@ -280,9 +280,19 @@ Panel {
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     }
   }
+  function applyHostSettings() {
+    // The plugin loader assigns bar before settings. Waiting for that host
+    // injection prevents a startup refresh from using the panel defaults.
+    if (!bar) return
+    if (github.settingsReady)
+      github.settings = root.settings
+    else
+      github.initialize(root.settings)
+  }
+
   onCursorTargetsChanged: ensureCursor()
-  onSettingsChanged: if (github.settingsReady) github.settings = root.settings
-  Component.onCompleted: github.initialize(root.settings)
+  onSettingsChanged: applyHostSettings()
+  onBarChanged: if (bar) Qt.callLater(applyHostSettings)
 
   Service { id: github }
 

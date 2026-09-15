@@ -337,7 +337,7 @@ Item {
         try {
             var data = JSON.parse(String(raw || ""));
             var incomingState = String(data.state || "error");
-            var preserveReadyDashboard = incomingState === "rate-limited" && fetchedAt !== "";
+            var preserveReadyDashboard = incomingState === "rate-limited" && data.preserveDashboard === true && fetchedAt !== "";
             state = incomingState;
             message = String(data.message || "");
             if (!preserveReadyDashboard) {

@@ -41,6 +41,7 @@ Repository search, metric filters, and sorting make even large GitHub accounts m
 - [`gh`](https://cli.github.com/) on `PATH`
 - [`jq`](https://jqlang.github.io/jq/)
 - `flock` from util-linux; Omarchy includes it by default
+- `sha256sum` from GNU coreutils; Omarchy includes it by default
 - [`curl`](https://curl.se/); Omarchy includes it by default
 - A Nerd Font; Omarchy includes one by default
 
@@ -57,7 +58,7 @@ The `notifications` scope is required to read notifications and mark threads rea
 gh auth refresh -h github.com -s notifications -s repo
 ```
 
-Omarchy GitHub delegates authentication entirely to `gh`. It does not read, copy, log, or persist your GitHub token.
+Omarchy GitHub delegates authentication entirely to `gh`. It never logs or persists your GitHub token. The helper derives a one-way in-memory fingerprint from the active token so cached dashboard data and rate-limit state cannot cross accounts; only that fingerprint is stored.
 
 ## Install
 
@@ -211,6 +212,7 @@ The shell watches local plugin files, making QML iteration fast.
 - Status-specific, paginated Actions requests prevent busy repositories from hiding active runs.
 - Completed runs are server-bounded to the configured failure window.
 - Independent requests allow successful sections to remain available when one endpoint fails.
+- A private cache is bound to the active credential fingerprint and the options that shape fetched data. Refresh timing is recomputed from the current interval, and successful notification mutations invalidate the cached snapshot.
 - After its persisted refresh gates, one `gh api --include /rate_limit` preflight reads core REST quota and server retry headers. A confirmed throttle without a server deadline uses a brief local retry guard, which is not shown as a GitHub reset time.
 
 Run the helper directly to inspect its JSON output:
