@@ -8,14 +8,19 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 assert_contains() {
   [[ $SERVICE_SOURCE == *"$1"* ]] || fail "$2"
 }
+assert_not_contains() {
+  [[ $SERVICE_SOURCE != *"$1"* ]] || fail "$2"
+}
 assert_contains 'String(setting("repositoryScope", "Owned")).toLowerCase() === "owned and organizations" ? "organizations" : "owned"' \
   "an unrecognised repository scope no longer falls back to the narrower one"
 assert_contains '"--repository-scope", repositoryMode()' \
   "the repository scope setting is not passed to the helper"
 assert_contains $'onIncludeContributionsChanged: {\n        if (settingsReady && includeContributions)\n            refresh();\n    }' \
   "re-enabling contributions does not refresh the cleared calendar"
-assert_contains 'Component.onCompleted: settingsReady = true' \
-  "the contribution refresh guard does not skip initial property setup"
+assert_contains $'function initialize(initialSettings) {\n        if (settingsReady)\n            return ;\n        settings = initialSettings || {};\n        settingsReady = true;\n        automaticRefresh();' \
+  "startup does not wait for explicit settings injection"
+assert_not_contains 'Component.onCompleted: settingsReady = true' \
+  "service still starts itself before host settings injection"
 assert_contains 'fetchedRepositoryScope = String(data.repositoryScope || "owned");' \
   "the panel cannot tell which scope the payload was fetched with"
 assert_contains 'readonly property string contributionsPosition:' \
@@ -25,13 +30,11 @@ assert_contains $'        if (value === "middle (above repositories)") return "M
 assert_contains $'if (value === "all repositories")\n            return "all";' \
   "the full Actions scan does not require an exact setting match"
 
-assert_not_contains() {
-  [[ $SERVICE_SOURCE != *"$1"* ]] || fail "$2"
-}
-
-assert_contains $'function refresh() {\n        if (fetchProcess.running || markProcess.running || markQueue.length > 0) {\n            refreshQueued = true;\n            return ;\n        }' \
+assert_contains $'function startRefresh(automatic) {\n        if (!settingsReady)\n            return ;\n        if (fetchProcess.running || markProcess.running || markQueue.length > 0) {\n            if (!refreshQueued)\n                refreshQueuedAutomatic = automatic;\n            else if (!automatic)\n                refreshQueuedAutomatic = false;\n            refreshQueued = true;\n            return ;\n        }' \
   "refresh and notification marking are not serialized"
-assert_contains $'notifications = visibleNotifications(data.notifications);\n            notificationsRevision++;' \
+assert_contains 'argv = argv.concat(["--automatic", "--refresh-interval", String(refreshIntervalSec)]);' \
+  "automatic refreshes do not identify cache-aware helper invocations"
+assert_contains $'notifications = visibleNotifications(data.notifications);\n                notificationsRevision++;' \
   "notification refreshes do not invalidate prepared confirmations"
 assert_contains $'hideNotification(value);\n        enqueueMark(value);\n        startQueuedMark();' \
   "single-notification marking is dropped during refresh"

@@ -24,6 +24,20 @@ TestCase {
     return calls
   }
 
+  function fetchProcess() {
+    for (var i = 0; i < QsIo.ProcessRegistry.processes.length; i++) {
+      var process = QsIo.ProcessRegistry.processes[i]
+      if (process.command.indexOf("--automatic") !== -1) return process
+    }
+    return null
+  }
+
+  function injectHostSettings(value) {
+    panel.bar = { foreground: "#ffffff", urgent: "#ff0000", fontFamily: "sans-serif" }
+    panel.settings = value || {}
+    wait(0)
+  }
+
   function init() {
     Commons.Util.reset()
     Qs.Quickshell.reset()
@@ -35,6 +49,29 @@ TestCase {
     wait(0)
   }
 
+  function test_initial_refresh_waits_for_host_settings() {
+    panel = panelComponent.createObject(this)
+    verify(panel !== null)
+    wait(0)
+    compare(fetchProcess(), null)
+
+    // The real bar loader injects these properties in this order.
+    injectHostSettings({
+      repositoryScope: "Owned and organizations",
+      includeForks: true,
+      includeContributions: false,
+      actionScanBehavior: "Off"
+    })
+
+    var process = fetchProcess()
+    verify(process !== null)
+    var command = process.command
+    compare(command[command.indexOf("--repository-scope") + 1], "organizations")
+    compare(command[command.indexOf("--include-forks") + 1], "true")
+    compare(command[command.indexOf("--include-contributions") + 1], "false")
+    compare(command[command.indexOf("--action-scan") + 1], "off")
+  }
+
   function test_notification_activation_obeys_url_policy_data() {
     return [
       { tag: "browser", behavior: "Browser tab", browserCount: 1, webAppCount: 0 },
@@ -43,8 +80,12 @@ TestCase {
   }
 
   function test_notification_activation_obeys_url_policy(data) {
-    panel = panelComponent.createObject(this, { settings: { linkBehavior: data.behavior } })
+    panel = panelComponent.createObject(this)
     verify(panel !== null)
+    injectHostSettings({ linkBehavior: data.behavior })
+    var process = fetchProcess()
+    if (process && process.running)
+      process.complete(0, '{"state":"ready","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"actions":[],"failedActions":[],"repositories":[],"warnings":[],"contributions":{"total":0,"days":[]}}', "")
 
     panel.openRow("notification", "123", "https://github.com@evil.example/octocat")
     compare(Commons.Util.execCalls.length, 0)
@@ -57,5 +98,20 @@ TestCase {
     compare(Qs.Quickshell.execCalls.length, data.webAppCount)
     compare(markCalls().length, 1)
     compare(panel.closeCalls, 1)
+  }
+
+  function test_rate_limit_reset_is_visible_without_remaining_quota() {
+    panel = panelComponent.createObject(null)
+    verify(panel !== null)
+    injectHostSettings({})
+    panel.open()
+    var process = fetchProcess()
+    verify(process !== null)
+    process.complete(0, '{"state":"rate-limited","message":"GitHub API rate limit reached.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"actions":[],"failedActions":[],"repositories":[],"warnings":[],"contributions":{"total":0,"days":[]},"rateLimit":{"resetAt":"2030-01-01T00:00:00Z"}}', "")
+
+    var status = findChild(panel, "rateLimitStatusText")
+    verify(status !== null)
+    compare(status.visible, true)
+    compare(status.text, "GitHub API rate limit reached. Reset: 2030-01-01T00:00:00Z")
   }
 }

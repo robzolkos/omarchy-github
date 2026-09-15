@@ -21,10 +21,11 @@ TestCase {
     }
   }
 
-  function payload(state, message, notifications, contributions) {
+  function payload(state, message, notifications, contributions, preserveDashboard) {
     return JSON.stringify({
       state: state,
       message: message,
+      preserveDashboard: preserveDashboard === true,
       login: "octocat",
       repositoryScope: "owned",
       fetchedAt: "2020-01-01T00:00:00Z",
@@ -70,6 +71,7 @@ TestCase {
   function init() {
     service = serviceComponent.createObject(this)
     verify(service !== null)
+    service.initialize({})
     tryVerify(function() { return fetchProcess() !== null && fetchProcess().running })
   }
 
@@ -77,6 +79,31 @@ TestCase {
     service.destroy()
     service = null
     wait(0)
+  }
+
+  function test_initialization_waits_for_injected_settings() {
+    service.destroy()
+    service = serviceComponent.createObject(this)
+    verify(service !== null)
+    wait(0)
+    compare(fetchProcess(), null)
+
+    service.initialize({includeContributions: false})
+    tryVerify(function() { return fetchProcess() !== null && fetchProcess().running })
+    var command = fetchProcess().command
+    var option = command.indexOf("--include-contributions")
+    verify(option >= 0)
+    compare(command[option + 1], "false")
+    verify(command.indexOf("--automatic") >= 0)
+  }
+
+  function test_queued_automatic_refresh_stays_cache_aware() {
+    service.automaticRefresh()
+    compare(service.refreshQueued, true)
+    compare(service.refreshQueuedAutomatic, true)
+    fetchProcess().complete(0, payload("ready", "Ready", []), "")
+    tryVerify(function() { return fetchProcess().running })
+    verify(fetchProcess().command.indexOf("--automatic") >= 0)
   }
 
   function test_first_load_and_ready_refresh_keep_snapshot() {
@@ -241,5 +268,24 @@ TestCase {
     compare(service.state, "rate-limited")
     compare(service.message, "GitHub API rate limit reached.")
     compare(service.rateLimit.remaining, 0)
+  }
+
+  function test_rate_limit_preserves_matching_ready_dashboard() {
+    completeInitialReady([notification("101")])
+    service.refresh()
+    fetchProcess().complete(0, payload("rate-limited", "Wait for reset", [], undefined, true), "")
+    compare(service.state, "rate-limited")
+    compare(service.notifications.length, 1)
+    compare(service.notifications[0].id, "101")
+    compare(service.repositories.length, 1)
+  }
+
+  function test_rate_limit_replaces_incompatible_ready_dashboard() {
+    completeInitialReady([notification("101")])
+    service.refresh()
+    fetchProcess().complete(0, payload("rate-limited", "Wait for reset", []), "")
+    compare(service.state, "rate-limited")
+    compare(service.notifications.length, 0)
+    compare(service.repositories.length, 1)
   }
 }

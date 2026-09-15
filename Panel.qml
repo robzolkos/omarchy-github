@@ -248,6 +248,16 @@ Panel {
     return Math.floor(seconds / 2592000) + "mo ago"
   }
 
+  function statusMessage() {
+    var text = String(github.message || "")
+    if (github.state !== "rate-limited" || !github.rateLimit) return text
+    var resetAt = String(github.rateLimit.resetAt || "")
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(resetAt)) return text
+    var resetTime = Date.parse(resetAt)
+    if (!isFinite(resetTime) || new Date(resetTime).toISOString().replace(".000Z", "Z") !== resetAt) return text
+    return text + " Reset: " + resetAt
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -270,9 +280,21 @@ Panel {
       Qt.callLater(function() { keyCatcher.forceActiveFocus() })
     }
   }
-  onCursorTargetsChanged: ensureCursor()
+  function applyHostSettings() {
+    // The plugin loader assigns bar before settings. Waiting for that host
+    // injection prevents a startup refresh from using the panel defaults.
+    if (!bar) return
+    if (github.settingsReady)
+      github.settings = root.settings
+    else
+      github.initialize(root.settings)
+  }
 
-  Service { id: github; settings: root.settings }
+  onCursorTargetsChanged: ensureCursor()
+  onSettingsChanged: applyHostSettings()
+  onBarChanged: if (bar) Qt.callLater(applyHostSettings)
+
+  Service { id: github }
 
   UrlLauncher {
     id: urlLauncher
@@ -407,7 +429,7 @@ Panel {
             // line; in-flight work is the spinner beside the gear.
             meta: github.state === "ready" ?
               github.unreadCount + " unread · " + github.reviewRequests.length + " reviews · " + github.actionCount + " active actions"
-                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : github.message
+                + (github.failingPullRequestCount > 0 ? " · " + github.failingPullRequestCount + " failing" : "") : root.statusMessage()
             foreground: root.foreground
             fontFamily: root.fontFamily
             // The hero reserves the trailing space and centres the control
@@ -497,12 +519,13 @@ Panel {
 
             Text {
               id: statusText
+              objectName: "rateLimitStatusText"
               anchors.left: parent.left
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               anchors.margins: Style.space(10)
               text: {
-                if (github.state !== "ready") return github.message
+                if (github.state !== "ready") return root.statusMessage()
                 var summary = "Partial results · " + String(github.warnings[0] || "A GitHub request failed.")
                 if (github.warnings.length > 1) summary += " · " + (github.warnings.length - 1) + " more"
                 return summary

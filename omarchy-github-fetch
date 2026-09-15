@@ -17,6 +17,8 @@ failed_limit=20
 mark_notification=""
 mark_all_before=""
 mark_boundary_notifications=()
+automatic=false
+refresh_interval=900
 
 usage() {
   cat <<'EOF'
@@ -43,6 +45,8 @@ Usage: omarchy-github-fetch [options]
   --mark-boundary-notification ID
                                 Preserve same-second arrivals by marking only
                                 the fetched boundary thread ID (repeatable)
+  --automatic                   Honor cache freshness for a scheduled refresh
+  --refresh-interval N          Automatic refresh interval in seconds
 EOF
 }
 
@@ -65,15 +69,18 @@ while (($#)); do
     --mark-notification-read) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_notification=$2; shift 2 ;;
     --mark-all-read-before) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_all_before=$2; shift 2 ;;
     --mark-boundary-notification) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_boundary_notifications+=("$2"); shift 2 ;;
+    --automatic) automatic=true; shift ;;
+    --refresh-interval) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; refresh_interval=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-integer "$action_limit" && ((action_limit >= 1 && action_limit <= 500)) || { echo "invalid --action-repo-limit" >&2; exit 2; }
-integer "$concurrency" && ((concurrency >= 1 && concurrency <= 12)) || { echo "invalid --concurrency" >&2; exit 2; }
-integer "$failed_days" && ((failed_days >= 1 && failed_days <= 30)) || { echo "invalid --failed-days" >&2; exit 2; }
-integer "$failed_limit" && ((failed_limit >= 1 && failed_limit <= 100)) || { echo "invalid --failed-limit" >&2; exit 2; }
+if ! integer "$action_limit" || ((action_limit < 1 || action_limit > 500)); then echo "invalid --action-repo-limit" >&2; exit 2; fi
+if ! integer "$concurrency" || ((concurrency < 1 || concurrency > 12)); then echo "invalid --concurrency" >&2; exit 2; fi
+if ! integer "$failed_days" || ((failed_days < 1 || failed_days > 30)); then echo "invalid --failed-days" >&2; exit 2; fi
+if ! integer "$failed_limit" || ((failed_limit < 1 || failed_limit > 100)); then echo "invalid --failed-limit" >&2; exit 2; fi
+if ! integer "$refresh_interval" || ((refresh_interval < 60 || refresh_interval > 3600)); then echo "invalid --refresh-interval" >&2; exit 2; fi
 [[ $action_scan == off || $action_scan == recent || $action_scan == all ]] || { echo "invalid --action-scan" >&2; exit 2; }
 [[ $repository_scope == owned || $repository_scope == organizations ]] || { echo "invalid --repository-scope" >&2; exit 2; }
 # Interpolated into the GraphQL document, so it comes from the validated enum
@@ -109,8 +116,195 @@ if [[ -n $mark_notification && -n $mark_all_before ]]; then
   jq -n '{state:"error",message:"Choose one notification marking operation."}'
   exit 2
 fi
+
 command -v gh >/dev/null 2>&1 || { emit_state gh-not-installed "GitHub CLI is not installed or not on PATH."; exit 0; }
-gh auth status -h github.com >/dev/null 2>&1 || { emit_state logged-out "Sign in with gh auth login to load GitHub data."; exit 0; }
+command -v sha256sum >/dev/null 2>&1 || { emit_state error "sha256sum is required for private GitHub cache identity."; exit 1; }
+
+# Capture the exact credential that gh will use, including its documented
+# environment precedence. Pin every request in this process to that value so an
+# account switch cannot race the cache identity or a long-running refresh.
+credential_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+if [[ -z $credential_token ]]; then
+  credential_token=$(gh auth token -h github.com 2>/dev/null) || {
+    emit_state logged-out "Sign in with gh auth login to load GitHub data."
+    exit 0
+  }
+fi
+if [[ -z $credential_token ]]; then
+  emit_state logged-out "Sign in with gh auth login to load GitHub data."
+  exit 0
+fi
+credential_fingerprint=$(printf '%s' "$credential_token" | sha256sum | cut -d' ' -f1)
+if [[ ! $credential_fingerprint =~ ^[0-9a-f]{64}$ ]]; then
+  emit_state error "Could not identify the active GitHub credential."
+  exit 1
+fi
+export GH_TOKEN="$credential_token"
+unset GITHUB_TOKEN credential_token
+
+normalized_bool() {
+  if bool "$1"; then printf true; else printf false; fi
+}
+
+refresh_policy_fingerprint() {
+  printf '%s\n' \
+    "include_archived=$(normalized_bool "$include_archived")" \
+    "include_forks=$(normalized_bool "$include_forks")" \
+    "include_archived_reviews=$(normalized_bool "$include_archived_reviews")" \
+    "include_draft_reviews=$(normalized_bool "$include_draft_reviews")" \
+    "include_contributions=$(normalized_bool "$include_contributions")" \
+    "repository_scope=$repository_scope" \
+    "action_scan=$action_scan" \
+    "action_limit=$action_limit" \
+    "failed_days=$failed_days" \
+    "failed_limit=$failed_limit" |
+    sha256sum | cut -d' ' -f1
+}
+
+# Reads and notification mutations share this lock. A successful mutation can
+# therefore invalidate the cached dashboard before another helper can publish
+# or restore a stale notification snapshot.
+command -v flock >/dev/null 2>&1 || { emit_state error "flock is required for GitHub refresh serialization."; exit 1; }
+cache_dir="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/omarchy-github"
+if ! mkdir -p "$cache_dir" || ! chmod 700 "$cache_dir"; then
+  emit_state error "Could not prepare private GitHub cache storage."
+  exit 1
+fi
+cache_file="$cache_dir/dashboard.json"
+state_file="$cache_dir/refresh-state.json"
+: >"$cache_dir/refresh.lock" || { emit_state error "Could not prepare the GitHub refresh lock."; exit 1; }
+chmod 600 "$cache_dir/refresh.lock" || { emit_state error "Could not protect the GitHub refresh lock."; exit 1; }
+if ! exec {refresh_lock_fd}>"$cache_dir/refresh.lock"; then
+  emit_state error "Could not open the GitHub refresh lock."
+  exit 1
+fi
+flock "$refresh_lock_fd" || { emit_state error "Could not lock the GitHub refresh cache."; exit 1; }
+
+cache_context_matches=false
+policy_fingerprint=""
+last_refresh_attempt=0
+rate_until=0
+rate_reset_known=false
+rate_remaining=-1
+rate_cost=-1
+stored_credential=""
+stored_policy=""
+
+cache_valid() {
+  local candidate=${1:-$cache_file}
+  [[ $cache_context_matches == true && -f $candidate ]] || return 1
+  [[ $(wc -c <"$candidate") -le 5242880 ]] || return 1
+  jq -e '
+    .schemaVersion == 1 and .state == "ready" and
+    ([.notifications,.reviewRequests,.assignedIssues,.myPullRequests,.actions,.failedActions,.repositories,.warnings] | all(type == "array" and length <= 10000)) and
+    (.contributions | type == "object") and (.contributions.days | type == "array" and length <= 371) and
+    (.login | type == "string" and length <= 256) and (.fetchedAt | type == "string" and length <= 64)
+  ' "$candidate" >/dev/null 2>&1
+}
+
+write_state() {
+  local attempt=$1 rate=$2 reset_known=$3 remaining=$4 cost=$5 state_tmp
+  state_tmp=$(mktemp "$cache_dir/.refresh-state.XXXXXX") || return 1
+  chmod 600 "$state_tmp" || { rm -f "$state_tmp"; return 1; }
+  if ! jq -n --argjson attempt "$attempt" --argjson rate "$rate" --argjson known "$reset_known" \
+    --argjson remaining "$remaining" --argjson cost "$cost" --arg credential "$credential_fingerprint" \
+    --arg policy "$policy_fingerprint" \
+    '{schemaVersion:2,lastRefreshAttemptAt:$attempt,rateLimitUntil:$rate,rateLimitResetKnown:$known,
+      rateLimitRemaining:$remaining,rateLimitCost:$cost,credentialFingerprint:$credential,policyFingerprint:$policy}' >"$state_tmp"; then
+    rm -f "$state_tmp"; return 1
+  fi
+  mv -f "$state_tmp" "$state_file"
+}
+
+invalidate_cached_dashboard() {
+  local state_tmp
+  rm -f "$cache_file" || return 1
+  [[ -f $state_file ]] || return 0
+  state_tmp=$(mktemp "$cache_dir/.refresh-state.XXXXXX") || return 1
+  chmod 600 "$state_tmp" || { rm -f "$state_tmp"; return 1; }
+  if jq -e --arg credential "$credential_fingerprint" '
+      select(.schemaVersion == 2 and .credentialFingerprint == $credential) |
+      .lastRefreshAttemptAt = 0
+    ' "$state_file" >"$state_tmp" 2>/dev/null; then
+    mv -f "$state_tmp" "$state_file"
+  else
+    rm -f "$state_tmp"
+    rm -f "$state_file" || return 1
+  fi
+}
+
+if [[ -z $mark_notification && -z $mark_all_before ]]; then
+  now_epoch=${OMARCHY_GITHUB_NOW:-$(date +%s)}
+  if [[ ! $now_epoch =~ ^[0-9]+$ ]] || ((now_epoch > 4102444800)); then emit_state error "Invalid refresh clock."; exit 1; fi
+  policy_fingerprint=$(refresh_policy_fingerprint)
+  [[ $policy_fingerprint =~ ^[0-9a-f]{64}$ ]] || { emit_state error "Could not identify the GitHub refresh policy."; exit 1; }
+
+  if [[ -f $state_file && $(wc -c <"$state_file") -le 4096 ]]; then
+    read -r last_refresh_attempt rate_until rate_reset_known rate_remaining rate_cost stored_credential stored_policy < <(jq -r '
+      def epoch: type == "number" and . >= 0 and . <= 4102444800 and . == floor;
+      def counter: type == "number" and . >= -1 and . <= 1000000000 and . == floor;
+      def fingerprint: type == "string" and test("^[0-9a-f]{64}$");
+      if .schemaVersion == 2 and (.lastRefreshAttemptAt | epoch) and (.rateLimitUntil | epoch) and
+         (.rateLimitRemaining | counter) and (.rateLimitCost | counter) and
+         (.credentialFingerprint | fingerprint) and (.policyFingerprint | fingerprint)
+      then [.lastRefreshAttemptAt,.rateLimitUntil,(.rateLimitResetKnown == true),.rateLimitRemaining,.rateLimitCost,.credentialFingerprint,.policyFingerprint] | @tsv
+      else "0\t0\tfalse\t-1\t-1\t\t" end
+    ' "$state_file" 2>/dev/null || printf '0\t0\tfalse\t-1\t-1\t\t\n')
+  fi
+  [[ $last_refresh_attempt =~ ^[0-9]+$ ]] || last_refresh_attempt=0
+  [[ $rate_until =~ ^[0-9]+$ ]] || rate_until=0
+  [[ $rate_reset_known == true ]] || rate_reset_known=false
+  [[ $rate_remaining =~ ^-?[0-9]+$ ]] || rate_remaining=-1
+  [[ $rate_cost =~ ^-?[0-9]+$ ]] || rate_cost=-1
+
+  if [[ $stored_credential != "$credential_fingerprint" ]]; then
+    rm -f "$cache_file" || { emit_state error "Could not discard a GitHub cache from another credential."; exit 1; }
+    last_refresh_attempt=0
+    rate_until=0
+    rate_reset_known=false
+    rate_remaining=-1
+    rate_cost=-1
+  elif [[ $stored_policy != "$policy_fingerprint" ]]; then
+    # Rate limits belong to the credential and survive policy changes, but the
+    # dashboard and ordinary freshness do not: the new options need a new scan.
+    rm -f "$cache_file" || { emit_state error "Could not discard an incompatible GitHub cache."; exit 1; }
+    last_refresh_attempt=0
+  else
+    cache_context_matches=true
+  fi
+
+  emit_cached_status() {
+    local status=$1 text=$2 reset=$3 reset_known=$4 remaining=$5 cost=$6 fallback=${7:-} source preserve=false
+    if cache_valid; then source=$cache_file; preserve=true
+    elif [[ -n $fallback ]]; then source=$fallback
+    else source=/dev/stdin
+    fi
+    { [[ $source != /dev/stdin ]] || emit_state "$status" "$text"; } |
+      jq --arg state "$status" --arg message "$text" --argjson reset "$reset" --argjson known "$reset_known" \
+        --argjson remaining "$remaining" --argjson cost "$cost" --argjson preserve "$preserve" '
+        .state=$state | .message=$message | .preserveDashboard=$preserve | .rateLimit={} |
+        if $remaining >= 0 then .rateLimit.remaining=$remaining else . end |
+        if $cost >= 0 then .rateLimit.cost=$cost else . end |
+        if $known and $reset > 0 then .rateLimit.resetAt=($reset|todateiso8601) else . end |
+        if (.rateLimit | length) == 0 then .rateLimit=null else . end
+      ' "$source"
+  }
+
+  if ((rate_until > now_epoch)); then
+    emit_cached_status rate-limited "GitHub API rate limit reached; refresh is paused." "$rate_until" "$rate_reset_known" "$rate_remaining" "$rate_cost"
+    exit 0
+  fi
+  if [[ $automatic == true ]] && ((last_refresh_attempt + refresh_interval > now_epoch)); then
+    if cache_valid; then cat "$cache_file"; else emit_state waiting "GitHub refresh is deferred until the next interval."; fi
+    exit 0
+  fi
+
+  # Persist before the network is touched. If this process is interrupted,
+  # recreation cannot immediately repeat its first scan.
+  last_refresh_attempt=$now_epoch
+  cache_context_matches=true
+  write_state "$last_refresh_attempt" 0 false -1 -1 || { emit_state error "Could not record the next GitHub refresh."; exit 1; }
+fi
 
 error_detail() {
   tr '\n' ' ' <"$1" |
@@ -119,6 +313,10 @@ error_detail() {
 }
 
 if [[ -n $mark_notification ]]; then
+  if ! invalidate_cached_dashboard; then
+    jq -n --arg id "$mark_notification" '{state:"error",message:"Could not invalidate cached notification data.",notificationId:$id}'
+    exit 1
+  fi
   if ! error=$(mktemp); then
     jq -n --arg id "$mark_notification" '{state:"error",message:"Could not prepare the notification request.",notificationId:$id}'
     exit 1
@@ -138,6 +336,10 @@ fi
 # fetched threads from the boundary second. A new thread arriving in that same
 # second remains unread because its ID is not in the confirmed snapshot.
 if [[ -n $mark_all_before ]]; then
+  if ! invalidate_cached_dashboard; then
+    jq -n --arg at "$mark_all_before" '{state:"error",message:"Could not invalidate cached notification data.",lastReadAt:$at}'
+    exit 1
+  fi
   if ! error=$(mktemp); then
     jq -n --arg at "$mark_all_before" '{state:"error",message:"Could not prepare the bulk notification request.",lastReadAt:$at}'
     exit 1
@@ -168,6 +370,63 @@ fi
 trap 'rm -rf "$tmp"' EXIT
 warnings="$tmp/warnings"
 : >"$warnings"
+
+# Unlike ordinary `gh api` diagnostics, --include exposes the actual REST
+# response headers. Keep them separate from the JSON body so only server
+# evidence can set a displayed reset deadline.
+preflight_ok=true
+if ! gh api --include /rate_limit >"$tmp/preflight.response" 2>"$tmp/preflight.err"; then preflight_ok=false; fi
+tr -d '\r' <"$tmp/preflight.response" >"$tmp/preflight.normalized"
+awk '/^$/ { body=1; next } !body { print }' "$tmp/preflight.normalized" >"$tmp/preflight.headers"
+awk 'body { print } /^$/ { body=1 }' "$tmp/preflight.normalized" >"$tmp/preflight.json"
+preflight_status=$(sed -nE '1s/^HTTP\/[^ ]+ ([0-9]{3}).*/\1/p' "$tmp/preflight.headers")
+preflight_remaining=$(jq -r '.resources.core.remaining // empty' "$tmp/preflight.json" 2>/dev/null || :)
+preflight_reset=$(jq -r '.resources.core.reset // empty' "$tmp/preflight.json" 2>/dev/null || :)
+header_remaining=$(sed -nE 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]emaining:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p' "$tmp/preflight.headers" | tail -1)
+header_reset=$(sed -nE 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]eset:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p' "$tmp/preflight.headers" | tail -1)
+retry_after=$(sed -nE 's/^[Rr]etry-[Aa]fter:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p' "$tmp/preflight.headers" | tail -1)
+preflight_text=$(cat "$tmp/preflight.json" "$tmp/preflight.err")
+preflight_current_remaining=-1
+if [[ $preflight_remaining =~ ^[0-9]+$ ]]; then
+  preflight_current_remaining=$preflight_remaining
+elif [[ $header_remaining =~ ^[0-9]+$ ]]; then
+  preflight_current_remaining=$header_remaining
+fi
+preflight_rate=false
+if [[ $preflight_status == 429 ]] ||
+   [[ $preflight_status == 403 && ( $header_remaining == 0 || $retry_after =~ ^[0-9]+$ || $preflight_text =~ [Rr]ate[[:space:]]limit ) ]] ||
+   [[ $preflight_remaining == 0 ]]; then
+  preflight_rate=true
+fi
+if [[ $preflight_status == 401 ]]; then
+  rm -f "$cache_file"
+  write_state 0 0 false -1 -1 || :
+  emit_state invalid-credentials "GitHub rejected the saved credentials. Sign in again with gh auth login."
+  exit 0
+elif [[ $preflight_rate == true ]]; then
+  rate_until=0
+  rate_reset_known=false
+  rate_remaining=$preflight_current_remaining
+  rate_cost=-1
+  if [[ $preflight_remaining == 0 && $preflight_reset =~ ^[0-9]+$ ]]; then
+    rate_until=$preflight_reset; rate_reset_known=true
+  elif [[ $header_remaining == 0 && $header_reset =~ ^[0-9]+$ ]]; then
+    rate_until=$header_reset; rate_reset_known=true
+  elif [[ $retry_after =~ ^[0-9]+$ ]]; then
+    rate_until=$((now_epoch + retry_after)); rate_reset_known=true
+  fi
+  # If GitHub confirms throttling without a usable deadline, briefly suppress
+  # retries but do not present this local guard as a server-provided reset.
+  if ((rate_until <= now_epoch)); then rate_until=$((now_epoch + 60)); rate_reset_known=false; fi
+  write_state "$last_refresh_attempt" "$rate_until" "$rate_reset_known" "$rate_remaining" "$rate_cost" || { emit_state error "Could not persist GitHub rate-limit backoff."; exit 1; }
+  emit_cached_status rate-limited "GitHub API rate limit reached; refresh is paused." "$rate_until" "$rate_reset_known" "$rate_remaining" "$rate_cost"
+  exit 0
+elif [[ $preflight_ok == false || $preflight_status != 200 || ! $preflight_remaining =~ ^[0-9]+$ || ! $preflight_reset =~ ^[0-9]+$ ]]; then
+  detail=$(error_detail "$tmp/preflight.err")
+  emit_state error "${detail:-GitHub rate-limit status could not be checked.}"
+  exit 0
+fi
+
 api_error() {
   local label=$1 err=$2 detail
   detail=$(error_detail "$err")
@@ -228,6 +487,8 @@ my_pr_search="is:open is:pr author:@me sort:updated-desc"
 bool "$include_archived" || my_pr_search+=" archived:false"
 printf '[]\n' >"$tmp/mypulls.json"
 printf '0\n' >"$tmp/mypulls-total.json"
+# GraphQL variables are intentionally literal here and supplied with -F.
+# shellcheck disable=SC2016
 if my_pulls=$(gh api graphql -f query='query($search:String!) { search(query:$search,type:ISSUE,first:50) { issueCount nodes { ... on PullRequest { number title url updatedAt isDraft repository { nameWithOwner } commits(last:1) { nodes { commit { statusCheckRollup { state } } } } } } } }' -F search="$my_pr_search" 2>"$tmp/mypulls.err"); then
   # A pull request with no configured workflows reports a null rollup, which is
   # a distinct state from pending and must not be rendered as one.
@@ -245,6 +506,8 @@ cursor=null
 printf '[]\n' >"$tmp/repos.json"
 graphql_ok=true
 while :; do
+  # `$cursor` belongs to GraphQL; only the validated affiliation is expanded.
+  # shellcheck disable=SC2016
   if ! page=$(gh api graphql -f query='query($cursor:String) { viewer { login repositories(first:100,after:$cursor,ownerAffiliations:'"$owner_affiliations"',orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { name nameWithOwner url isArchived isFork stargazerCount updatedAt issues(states:OPEN){totalCount} pullRequests(states:OPEN){totalCount} } pageInfo { hasNextPage endCursor } } } rateLimit { remaining resetAt cost } }' -F cursor="$cursor" 2>"$tmp/graphql.err"); then api_error repositories "$tmp/graphql.err"; graphql_ok=false; break; fi
   printf '%s\n' "$page" >"$tmp/page.json"
   login=$(jq -r '.data.viewer.login // ""' "$tmp/page.json")
@@ -282,6 +545,8 @@ if [[ $action_scan != off && $(jq 'length' "$tmp/repos.json") -gt 0 ]]; then
     if [[ $failed == true ]]; then api_error "actions $repo" "$prefix.err"; fi
   }
   export tmp warnings cutoff_date; export -f scan_one api_error error_detail
+  # `$1` is expanded by each child shell, not this parent.
+  # shellcheck disable=SC2016
   xargs -r -P "$concurrency" -I{} bash -c 'scan_one "$1"' _ {} <"$tmp/scan-repos"
   jq -s 'add // []|unique_by(.id)|sort_by(.createdAt)|reverse' "$tmp"/action-*.active.json >"$tmp/actions.json" 2>/dev/null || printf '[]\n' >"$tmp/actions.json"
   jq -s --argjson cutoff "$cutoff_epoch" --argjson limit "$failed_limit" 'add // []|[.[]|select((.conclusion=="failure" or .conclusion=="timed_out" or .conclusion=="action_required" or .conclusion=="startup_failure") and ((.createdAt|fromdateiso8601) >= $cutoff))]|unique_by(.id)|sort_by(.updatedAt)|reverse|.[:$limit]' "$tmp"/action-*.completed.json >"$tmp/failed.json" 2>/dev/null || printf '[]\n' >"$tmp/failed.json"
@@ -353,6 +618,58 @@ fi
 warnings_json=$(sort -u "$warnings"|jq -Rsc 'split("\n")|map(select(length>0))')
 repo_count=$(jq 'length' "$tmp/repos.json")
 if [[ $graphql_ok == false && $repo_count -eq 0 ]]; then state=error; message="GitHub repositories could not be loaded."; else state=ready; message=""; fi
-rate_remaining=$(jq -r '.remaining // 999999' "$tmp/rate.json")
-if { [[ $rate_remaining =~ ^[0-9]+$ ]] && ((rate_remaining<=0)); } || grep -qiE 'rate.?limit|secondary rate' "$warnings"; then state=rate-limited; message="GitHub API rate limit reached."; fi
-jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --slurpfile contributions "$tmp/contributions.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],contributions:$contributions[0],warnings:$warnings,rateLimit:$rate[0]}'
+
+# Classify only response evidence. In particular, a local token plus an HTTP
+# failure is never reported as logged-out. A plain 403 may be permissions, so
+# it is rate-limited only when the response also says so.
+find "$tmp" -type f -name '*.err' -exec cat {} + >"$tmp/all-errors" 2>/dev/null || :
+graphql_rate_remaining=$(jq -r 'if (.remaining | type) == "number" then .remaining else -1 end' "$tmp/rate.json")
+graphql_rate_exhausted=false
+if [[ $graphql_rate_remaining =~ ^[0-9]+$ ]] && ((graphql_rate_remaining == 0)); then graphql_rate_exhausted=true; fi
+if grep -qiE 'HTTP[^0-9]*401|status[^0-9]*401' "$tmp/all-errors"; then
+  state=invalid-credentials
+  message="GitHub rejected the saved credentials. Sign in again with gh auth login."
+elif [[ $graphql_rate_exhausted == true ]] ||
+     grep -qiE 'HTTP[^0-9]*429|status[^0-9]*429|rate limit (exceeded|reached)|secondary rate limit|x-ratelimit-remaining[^0-9]*0' "$tmp/all-errors"; then
+  state="rate-limited"
+  message="GitHub API rate limit reached."
+fi
+
+payload="$tmp/payload.json"
+jq -n --arg state "$state" --arg message "$message" --arg login "${login:-}" --arg scope "$repository_scope" --slurpfile notifications "$tmp/notifications.json" --slurpfile reviews "$tmp/reviews.json" --slurpfile issues "$tmp/issues.json" --slurpfile mypulls "$tmp/mypulls.json" --slurpfile mypullstotal "$tmp/mypulls-total.json" --slurpfile actions "$tmp/actions.json" --slurpfile failed "$tmp/failed.json" --slurpfile repositories "$tmp/repos.json" --slurpfile contributions "$tmp/contributions.json" --argjson warnings "$warnings_json" --slurpfile rate "$tmp/rate.json" '{schemaVersion:1,state:$state,message:$message,login:$login,repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:$notifications[0],reviewRequests:$reviews[0],assignedIssues:$issues[0],myPullRequests:$mypulls[0],myPullRequestsTotal:$mypullstotal[0],actions:$actions[0],failedActions:$failed[0],repositories:$repositories[0],contributions:$contributions[0],warnings:$warnings,rateLimit:$rate[0]}' >"$payload"
+
+if [[ $state == invalid-credentials ]]; then
+  rm -f "$cache_file"
+  write_state 0 0 false -1 -1 || :
+fi
+
+if [[ $state == rate-limited ]]; then
+  rate_until=0
+  rate_reset_known=false
+  if [[ $graphql_rate_remaining =~ ^[0-9]+$ ]]; then rate_remaining=$graphql_rate_remaining
+  else rate_remaining=$preflight_current_remaining
+  fi
+  rate_cost=$(jq -r 'if (.cost | type) == "number" then .cost else -1 end' "$tmp/rate.json")
+  [[ $rate_cost =~ ^[0-9]+$ ]] || rate_cost=-1
+  if [[ $graphql_rate_exhausted == true ]]; then
+    rate_until=$(jq -r 'try (.resetAt | fromdateiso8601) catch 0' "$tmp/rate.json" 2>/dev/null || printf '0\n')
+    if [[ $rate_until =~ ^[0-9]+$ ]] && ((rate_until > now_epoch)); then rate_reset_known=true; else rate_until=0; fi
+  fi
+  # A later REST failure has no response headers unless that request used
+  # --include. Persist a short local guard, but never display it as a reset.
+  if ((rate_until <= now_epoch)); then rate_until=$((now_epoch + 60)); rate_reset_known=false; fi
+  write_state "$last_refresh_attempt" "$rate_until" "$rate_reset_known" "$rate_remaining" "$rate_cost" || { emit_state error "Could not persist GitHub rate-limit backoff."; exit 1; }
+  emit_cached_status rate-limited "$message" "$rate_until" "$rate_reset_known" "$rate_remaining" "$rate_cost" "$payload"
+  exit 0
+fi
+
+if [[ $state == ready ]] && cache_valid "$payload"; then
+  cache_tmp=$(mktemp "$cache_dir/.dashboard.XXXXXX") || { cat "$payload"; exit 0; }
+  chmod 600 "$cache_tmp" || { rm -f "$cache_tmp"; cat "$payload"; exit 0; }
+  if cp "$payload" "$cache_tmp" && mv -f "$cache_tmp" "$cache_file"; then
+    chmod 600 "$cache_file"
+  else
+    rm -f "$cache_tmp"
+  fi
+fi
+cat "$payload"
