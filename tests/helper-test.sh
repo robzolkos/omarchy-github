@@ -115,7 +115,9 @@ JSON
 JSON
     exit 0
   fi
-  if [[ $* == *'ownerAffiliations:[OWNER,ORGANIZATION_MEMBER]'* ]]; then
+  # Private organization repositories require both the repository-owner and
+  # viewer-access affiliation filters.
+  if [[ $* == *'ownerAffiliations:[OWNER,ORGANIZATION_MEMBER]'* && $* == *'affiliations:[OWNER,ORGANIZATION_MEMBER]'* ]]; then
     cat <<'JSON'
 {"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2}},{"name":"work","nameWithOwner":"acme/work","url":"https://github.com/acme/work","isArchived":false,"isFork":false,"stargazerCount":7,"updatedAt":"2026-01-06T00:00:00Z","issues":{"totalCount":4},"pullRequests":{"totalCount":5}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4998,"resetAt":"2026-01-01T01:00:00Z","cost":2}}}
 JSON
@@ -219,11 +221,11 @@ if grep -q 'archived:false' "$GH_TEST_LOG"; then fail "archived filter applied d
 : >"$GH_TEST_LOG"
 out_owned=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
 assert_jq '.repositoryScope == "owned" and (.repositories|length) == 1 and ([.repositories[].nameWithOwner]|index("acme/work")|not)' "$out_owned" "owned scope excludes organization repositories"
-grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG" || fail "default scope did not query owned repositories"
+grep -q 'ownerAffiliations:OWNER,affiliations:OWNER,' "$GH_TEST_LOG" || fail "default scope did not apply both owned-repository filters"
 : >"$GH_TEST_LOG"
 out_scoped=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --repository-scope organizations)
 assert_jq '.repositoryScope == "organizations" and (.repositories|length) == 2 and ([.repositories[].nameWithOwner]|index("acme/work") != null)' "$out_scoped" "organization scope includes organization repositories"
-grep -q 'ownerAffiliations:\[OWNER,ORGANIZATION_MEMBER\],' "$GH_TEST_LOG" || fail "organization scope did not reach the query"
+grep -q 'ownerAffiliations:\[OWNER,ORGANIZATION_MEMBER\],affiliations:\[OWNER,ORGANIZATION_MEMBER\],' "$GH_TEST_LOG" || fail "organization scope did not apply both repository affiliation filters"
 if grep -q 'ownerAffiliations:OWNER,' "$GH_TEST_LOG"; then fail "owned affiliation used despite the organization scope"; fi
 
 : >"$GH_TEST_LOG"
