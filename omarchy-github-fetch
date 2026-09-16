@@ -85,7 +85,7 @@ if ! integer "$refresh_interval" || ((refresh_interval < 60 || refresh_interval 
 [[ $repository_scope == owned || $repository_scope == organizations ]] || { echo "invalid --repository-scope" >&2; exit 2; }
 # Interpolated into the GraphQL document, so it comes from the validated enum
 # above. The argument itself never reaches the query.
-if [[ $repository_scope == organizations ]]; then owner_affiliations="[OWNER,ORGANIZATION_MEMBER]"; else owner_affiliations="OWNER"; fi
+if [[ $repository_scope == organizations ]]; then repository_affiliations="[OWNER,ORGANIZATION_MEMBER]"; else repository_affiliations="OWNER"; fi
 
 emit_state() {
   jq -n --arg state "$1" --arg message "$2" --arg scope "$repository_scope" '{schemaVersion:1,state:$state,message:$message,login:"",repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],contributions:{total:0,days:[]},rateLimit:null}'
@@ -506,9 +506,11 @@ cursor=null
 printf '[]\n' >"$tmp/repos.json"
 graphql_ok=true
 while :; do
-  # `$cursor` belongs to GraphQL; only the validated affiliation is expanded.
+  # The owner and viewer affiliation filters jointly select repositories in
+  # the configured scope, including private repositories reached through an
+  # organization. `$cursor` belongs to GraphQL; only validated values expand.
   # shellcheck disable=SC2016
-  if ! page=$(gh api graphql -f query='query($cursor:String) { viewer { login repositories(first:100,after:$cursor,ownerAffiliations:'"$owner_affiliations"',orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { name nameWithOwner url isArchived isFork stargazerCount updatedAt issues(states:OPEN){totalCount} pullRequests(states:OPEN){totalCount} } pageInfo { hasNextPage endCursor } } } rateLimit { remaining resetAt cost } }' -F cursor="$cursor" 2>"$tmp/graphql.err"); then api_error repositories "$tmp/graphql.err"; graphql_ok=false; break; fi
+  if ! page=$(gh api graphql -f query='query($cursor:String) { viewer { login repositories(first:100,after:$cursor,ownerAffiliations:'"$repository_affiliations"',affiliations:'"$repository_affiliations"',orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { name nameWithOwner url isArchived isFork stargazerCount updatedAt issues(states:OPEN){totalCount} pullRequests(states:OPEN){totalCount} } pageInfo { hasNextPage endCursor } } } rateLimit { remaining resetAt cost } }' -F cursor="$cursor" 2>"$tmp/graphql.err"); then api_error repositories "$tmp/graphql.err"; graphql_ok=false; break; fi
   printf '%s\n' "$page" >"$tmp/page.json"
   login=$(jq -r '.data.viewer.login // ""' "$tmp/page.json")
   jq '[.data.viewer.repositories.nodes[] | {name,nameWithOwner,url,archived:.isArchived,fork:.isFork,stars:.stargazerCount,issues:.issues.totalCount,prs:.pullRequests.totalCount,updatedAt,activeActions:0}]' "$tmp/page.json" >"$tmp/page.repos"
