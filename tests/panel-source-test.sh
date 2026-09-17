@@ -129,6 +129,8 @@ assert_contains $'function notificationPageCount() {\n    return Math.max(1, Mat
   "notification pages are counted over ambient rows"
 assert_contains 'var rows = attentionNotifications().slice(start, start + activityPreviewCount).concat(ambientNotifications().slice(0, ambientPreviewCount))' \
   "ambient notifications are not capped behind the attention window"
+assert_contains $'readonly property int ambientPreviewCount: 3' \
+  "the ambient preview cap is not pinned to three rows"
 assert_contains $'function ambientOverflowCount() {\n    return Math.max(0, ambientNotifications().length - ambientPreviewCount)\n  }' \
   "collapsed ambient notifications stop reporting how many were hidden"
 assert_contains $'if (ambientOverflowCount() > 0) targets.push({ key: "ambientoverflow:more", kind: "ambientoverflow", row: { url: "https://github.com/notifications" } })' \
