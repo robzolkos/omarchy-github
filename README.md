@@ -11,7 +11,7 @@ Your GitHub work, directly in the Omarchy bar.
 The dashboard is ordered by urgency so the most actionable work appears first:
 
 - **Contribution calendar** — your year on GitHub at a glance. The heatmap shades from the theme foreground, with each cell showing the contribution count on hover. Turn it off in settings if you do not want it, and choose whether it sits at the top, between activity and repositories, or at the very bottom.
-- **Unread notifications** — open the related thread, mark it read in place, or clear the whole list
+- **Unread notifications** — sorted so mentions, reviews, comments, and assignments come first while CI, subscription, and state-change noise collapses behind a dim count row; open the related thread, mark it read in place, or clear the whole list
 - **Review requests** — see pull requests waiting on your review
 - **My pull requests** — track the pull requests you opened and the state of their checks
 - **Assigned issues** — keep track of open issues assigned to you
@@ -107,6 +107,7 @@ omarchy plugin remove robzolkos.github
 | Click a row | Open it on GitHub; notification rows are also marked read |
 | Gear button in the panel header | Open the settings page |
 | Check button on a notification | Mark the thread read immediately, then confirm with GitHub |
+| Dim **+N more quieter notifications** row | Open the GitHub inbox |
 | **Mark all read** in the notifications footer | Arm the bulk mark-as-read |
 | **Confirm?** on the armed button | Mark every notification on screen read |
 | `j` / `k` or arrow keys | Move through visible rows |

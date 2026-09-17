@@ -57,6 +57,12 @@ Panel {
   property real wheelAccumulator: 0
   readonly property int activityPreviewCount: 5
   readonly property int activityExpandedCount: 25
+  // Reasons that say GitHub churned in the background rather than that a
+  // person is waiting on you. Anything else — including a missing or unknown
+  // reason — counts as attention, so a reason GitHub adds later can never be
+  // silently buried.
+  readonly property var ambientReasons: ["ci_activity", "subscribed", "state_change"]
+  readonly property int ambientPreviewCount: 3
   readonly property var metricFilters: [
     { id: "all", label: "All" }, { id: "issues", label: "Issues" },
     { id: "prs", label: "PRs" }, { id: "stars", label: "Stars" },
@@ -76,15 +82,44 @@ Panel {
     return rows.slice(0, expanded ? activityExpandedCount : activityPreviewCount)
   }
 
+  function isAmbientNotification(item) {
+    return ambientReasons.indexOf(String(item && item.reason || "")) !== -1
+  }
+
+  // Each half keeps the fetcher's newest-first order, so demoting ambient
+  // reasons never reshuffles the work a person caused.
+  function attentionNotifications() {
+    var rows = []
+    for (var i = 0; i < github.notifications.length; i++) {
+      if (!isAmbientNotification(github.notifications[i])) rows.push(github.notifications[i])
+    }
+    return rows
+  }
+
+  function ambientNotifications() {
+    var rows = []
+    for (var i = 0; i < github.notifications.length; i++) {
+      if (isAmbientNotification(github.notifications[i])) rows.push(github.notifications[i])
+    }
+    return rows
+  }
+
+  function ambientOverflowCount() {
+    return Math.max(0, ambientNotifications().length - ambientPreviewCount)
+  }
+
   function notificationPageCount() {
-    return Math.max(1, Math.ceil(github.notifications.length / activityPreviewCount))
+    return Math.max(1, Math.ceil(attentionNotifications().length / activityPreviewCount))
   }
 
   function notificationRows() {
     var page = Math.max(0, Math.min(notificationsPage, notificationPageCount() - 1))
     if (page !== notificationsPage) notificationsPage = page
     var start = page * activityPreviewCount
-    return github.notifications.slice(start, start + activityPreviewCount)
+    // Attention rows page on their own; the ambient preview stays pinned below
+    // them on every page so background noise can never crowd out a thread.
+    var rows = attentionNotifications().slice(start, start + activityPreviewCount).concat(ambientNotifications().slice(0, ambientPreviewCount))
+    return rows
   }
 
   function buildCursorTargets() {
@@ -93,6 +128,9 @@ Panel {
       for (var i = 0; i < rows.length; i++) targets.push({ key: kind + ":" + String(rows[i].id || rows[i].url || i), kind: kind, row: rows[i] })
     }
     add("notification", notificationRows())
+    // The collapsed-ambient count row opens the inbox, not a thread, so it
+    // travels an open-only kind that openRow never tries to mark read.
+    if (ambientOverflowCount() > 0) targets.push({ key: "ambientoverflow:more", kind: "ambientoverflow", row: { url: "https://github.com/notifications" } })
     add("review", sectionRows(github.reviewRequests, reviewsExpanded))
     add("mypull", sectionRows(github.myPullRequests, myPullsExpanded))
     add("issue", sectionRows(github.assignedIssues, issuesExpanded))
@@ -572,6 +610,11 @@ Panel {
             actionRevision: github.notificationsRevision
             actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }
             onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }
+          }
+
+          AmbientOverflowRow {
+            width: parent.width
+            visible: root.ambientOverflowCount() > 0
           }
 
           DashboardSection {
@@ -1403,6 +1446,40 @@ Panel {
         bordered: false
         onClicked: github.markNotificationRead(linkRow.notificationId)
       }
+    }
+  }
+
+  // The dim count row standing in for ambient notifications collapsed past
+  // their preview. It opens the inbox rather than any one thread, and the
+  // section header above it still counts every hidden row.
+  component AmbientOverflowRow: CursorSurface {
+    id: overflowRow
+    readonly property string cursorKey: "ambientoverflow:more"
+    hasCursor: root.cursorActive && root.selectedKey() === cursorKey
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(overflowRow)
+    foreground: root.foreground
+    implicitHeight: overflowText.implicitHeight + Style.space(16)
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: root.selectKey(overflowRow.cursorKey)
+      onClicked: root.openUrl("https://github.com/notifications")
+    }
+    Text {
+      id: overflowText
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(9)
+      anchors.rightMargin: Style.space(9)
+      text: "+ " + root.ambientOverflowCount() + " more quieter notifications · ci_activity, subscribed, state_change"
+      textFormat: Text.PlainText
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      elide: Text.ElideRight
     }
   }
 
