@@ -118,6 +118,32 @@ assert_contains $'text: "󰅂"\n        tooltipText: "Next notifications"' \
 assert_contains $'text: (section.page + 1) + " / " + section.pageCount\n        height: previousPageButton.height\n        color: root.dim' \
   "notification page number is not vertically centered with its controls"
 
+# Reason-weighted ordering and ambient collapse.
+assert_contains $'title: "UNREAD NOTIFICATIONS"\n            count: github.notifications.length' \
+  "the notifications header hides collapsed ambient rows from its count"
+assert_contains $'readonly property var ambientReasons: ["ci_activity", "subscribed", "state_change"]' \
+  "the demoted notification reasons are not named in one list"
+assert_contains $'function isAmbientNotification(item) {\n    return ambientReasons.indexOf(String(item && item.reason || "")) !== -1\n  }' \
+  "an unknown notification reason is demoted below attention"
+assert_contains $'function notificationPageCount() {\n    return Math.max(1, Math.ceil(attentionNotifications().length / activityPreviewCount))\n  }' \
+  "notification pages are counted over ambient rows"
+assert_contains 'var rows = attentionNotifications().slice(start, start + activityPreviewCount).concat(ambientNotifications().slice(0, ambientPreviewCount))' \
+  "ambient notifications are not capped behind the attention window"
+assert_contains $'readonly property int ambientPreviewCount: 3' \
+  "the ambient preview cap is not pinned to three rows"
+assert_contains $'function ambientOverflowCount() {\n    return Math.max(0, ambientNotifications().length - ambientPreviewCount)\n  }' \
+  "collapsed ambient notifications stop reporting how many were hidden"
+assert_contains $'if (ambientOverflowCount() > 0) targets.push({ key: "ambientoverflow:more", kind: "ambientoverflow", row: { url: "https://github.com/notifications" } })' \
+  "the collapsed-ambient count row cannot be reached from the keyboard"
+assert_contains $'component AmbientOverflowRow: CursorSurface {\n    id: overflowRow\n    readonly property string cursorKey: "ambientoverflow:more"' \
+  "the collapsed-ambient count row is not a keyboard cursor target"
+assert_contains $'visible: root.ambientOverflowCount() > 0' \
+  "the collapsed-ambient count row shows with nothing hidden"
+assert_contains $'text: "+ " + root.ambientOverflowCount() + " more quieter notifications · ci_activity, subscribed, state_change"' \
+  "the collapsed-ambient count row does not say which reasons were hidden"
+assert_contains $'onClicked: root.openUrl("https://github.com/notifications")' \
+  "clicking the collapsed-ambient count row opens a thread instead of the inbox"
+
 assert_contains $'function applyPanelWheel(event) {\n    if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false' \
   "the panel still uses Flickable's default wheel distance"
 assert_contains $'panelFlick.contentY = Math.max(0, Math.min(maxY, panelFlick.contentY - wheel.steps * Style.space(80)))' \
