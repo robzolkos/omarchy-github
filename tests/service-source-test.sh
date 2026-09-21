@@ -15,6 +15,12 @@ assert_contains 'String(setting("repositoryScope", "Owned")).toLowerCase() === "
   "an unrecognised repository scope no longer falls back to the narrower one"
 assert_contains '"--repository-scope", repositoryMode()' \
   "the repository scope setting is not passed to the helper"
+assert_contains 'readonly property string githubUrl: normalizedGitHubUrl(setting("githubUrl", "https://github.com"))' \
+  "the configured GitHub URL is not exposed to the panel"
+assert_contains '[helperPath(), "--github-url", githubUrl, "--include-archived"' \
+  "the configured GitHub URL is not passed to dashboard refreshes"
+assert_contains '[helperPath(), "--github-url", githubUrl, "--mark-notification-read", value]' \
+  "the configured GitHub URL is not passed to notification mutations"
 assert_contains $'onIncludeContributionsChanged: {\n        if (settingsReady && includeContributions)\n            refresh();\n    }' \
   "re-enabling contributions does not refresh the cleared calendar"
 assert_contains $'function initialize(initialSettings) {\n        if (settingsReady)\n            return ;\n        settings = initialSettings || {};\n        settingsReady = true;\n        automaticRefresh();' \
@@ -59,7 +65,7 @@ assert_contains $'function markAllNotificationsRead(prepared) {\n        var con
   "bulk marking can start during a dashboard refresh"
 assert_contains $'if (confirmed !== prepareMarkAllNotificationsRead()) {\n            notificationActionStatus = "Notifications changed. Confirm again.";' \
   "bulk marking does not verify the confirmed snapshot"
-assert_contains $'var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];\n        for (var i = 0; i < snapshot.boundaryIds.length; i++)\n            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));' \
+assert_contains $'var commandLine = [helperPath(), "--github-url", githubUrl, "--mark-all-read-before", String(snapshot.boundary || "")];\n        for (var i = 0; i < snapshot.boundaryIds.length; i++)\n            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));' \
   "bulk marking does not protect same-second arrivals"
 assert_contains $'function hideAllNotifications() {\n        var ids = [];\n        var hidden = copyMap(hiddenNotifications);\n        var remaining = [];\n        for (var i = 0; i < notifications.length; i++) {' \
   "bulk marking does not batch its optimistic removal"

@@ -54,6 +54,17 @@ TestCase {
     compare(call[1], data.url)
   }
 
+  function test_enterprise_urls_use_the_configured_base_path() {
+    launcher.githubUrl = "https://git.example.test:8443/platform"
+
+    verify(launcher.openUrl("https://git.example.test:8443/platform/octocat/hello"))
+    compare(webAppCalls.length, 1)
+    verify(!launcher.openUrl("https://git.example.test:8443/octocat/hello"))
+    verify(!launcher.openUrl("https://git.example.test:8443/platform-evil/octocat"))
+    verify(!launcher.openUrl("https://evil.example/platform/octocat"))
+    compare(webAppCalls.length, 1)
+  }
+
   function test_non_github_origins_never_launch_data() {
     return [
       { tag: "empty", url: "" },

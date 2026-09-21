@@ -52,6 +52,12 @@ gh auth login
 gh auth status
 ```
 
+For GitHub Enterprise, authenticate against your instance instead:
+
+```bash
+gh auth login --hostname github.example.com
+```
+
 The `notifications` scope is required to read notifications and mark threads read. The `repo` scope may be required for private repositories, review requests, assigned issues, and Actions:
 
 ```bash
@@ -143,6 +149,7 @@ Configure the widget through Omarchy's bar widget settings. Existing installatio
 
 | Setting | Default |
 | --- | --- |
+| GitHub URL | `https://github.com` |
 | Refresh interval | 900 seconds (15 minutes) |
 | Open links | **Web app window** |
 | Include archived repositories | Off |
@@ -169,6 +176,12 @@ Set these options from the command line after installing the plugin:
 ```bash
 omarchy bar set robzolkos.github repositoryScope "Owned and organizations"
 omarchy bar set robzolkos.github actionScanBehavior "Recent repositories"
+```
+
+Point the widget at any GitHub Enterprise instance by setting its base URL. The URL may include a port or path and trailing slashes are ignored:
+
+```bash
+omarchy bar set robzolkos.github githubUrl "https://github.example.com"
 ```
 
 Restore the narrowest behavior with:
@@ -218,7 +231,7 @@ The shell watches local plugin files, making QML iteration fast.
 Run the helper directly to inspect its JSON output:
 
 ```bash
-./omarchy-github-fetch --action-scan recent --action-repo-limit 15 | jq
+./omarchy-github-fetch --github-url https://github.com --action-scan recent --action-repo-limit 15 | jq
 ```
 
 ## License
