@@ -158,9 +158,23 @@ TestCase {
     verify(marking.running)
     compare(marking.command, [
       service.helperPath(),
+      "--github-url", "https://github.com",
       "--mark-all-read-before", "2020-01-02T00:00:00Z",
       "--mark-boundary-notification", "101"
     ])
+  }
+
+  function test_enterprise_url_is_normalized_and_passed_to_helper() {
+    service.destroy()
+    service = serviceComponent.createObject(this)
+    verify(service !== null)
+    service.settings = {githubUrl: "https://git.example.test/platform/"}
+
+    compare(service.githubUrl, "https://git.example.test/platform")
+    var command = service.command(false)
+    var option = command.indexOf("--github-url")
+    verify(option >= 0)
+    compare(command[option + 1], "https://git.example.test/platform")
   }
 
   function test_successful_bulk_mark_reconciles_hidden_rows() {

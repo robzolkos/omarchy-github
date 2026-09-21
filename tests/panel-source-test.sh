@@ -66,7 +66,7 @@ assert_contains $'onSettingsChanged: applyHostSettings()\n  onBarChanged: if (ba
   "panel does not initialize for either host property injection order"
 assert_not_contains 'Component.onCompleted: github.initialize(root.settings)' \
   "panel still starts a default-policy refresh before host settings arrive"
-assert_contains $'UrlLauncher {\n    id: urlLauncher\n    linkBehavior: github.linkBehavior\n    // Both launchers receive an argv array; no URL is interpreted by a shell.\n    onBrowserLaunchRequested: function(argv) { Util.execArgv(argv) }\n    onWebAppLaunchRequested: function(argv) { Quickshell.execDetached(argv) }' \
+assert_contains $'UrlLauncher {\n    id: urlLauncher\n    linkBehavior: github.linkBehavior\n    githubUrl: github.githubUrl\n    // Both launchers receive an argv array; no URL is interpreted by a shell.\n    onBrowserLaunchRequested: function(argv) { Util.execArgv(argv) }\n    onWebAppLaunchRequested: function(argv) { Quickshell.execDetached(argv) }' \
   "the open-links setting does not choose argv-safe browser and web app launchers"
 
 # updateEntryInline rewrites the shell.json entry whole, so a persist that does
@@ -105,8 +105,10 @@ assert_contains $'model: root.notificationRows()\n            showExpansionContr
   "notification pagination still shows an inactive expansion control"
 assert_contains $'showReadAction: true\n      showTrailingIndicator: false\n      notificationId: String(modelData.id || "")' \
   "notification rows retain an open-link indicator beside their read action"
-assert_contains $'title: "ASSIGNED ISSUES"\n            count: github.assignedIssues.length\n            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)\n            expanded: root.issuesExpanded\n            footerButtonsBordered: true\n            openUrl: "https://github.com/issues/assigned"' \
+assert_contains $'title: "ASSIGNED ISSUES"\n            count: github.assignedIssues.length\n            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)\n            expanded: root.issuesExpanded\n            footerButtonsBordered: true\n            openUrl: github.githubUrl + "/issues/assigned"' \
   "assigned-issues open control does not retain its matching border"
+assert_contains 'root.openUrl(github.githubUrl + "/" + block.login)' \
+  "contribution profile links do not use the configured GitHub URL"
 assert_contains 'readonly property bool showAction: section.count > 0 && section.actionText !== ""' \
   "bulk notification action disappears while data is loading"
 assert_contains 'enabled: section.actionEnabled && !section.actionBusy' \

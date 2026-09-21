@@ -19,6 +19,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
+      "githubUrl": "https://github.com",
       "refreshIntervalSec": 900,
       "linkBehavior": "Web app window",
       "includeArchived": false,
@@ -37,6 +38,7 @@
       "iconAlwaysUnlit": false
     },
     "schema": [
+      { "key": "githubUrl", "type": "string", "label": "GitHub URL", "defaultValue": "https://github.com", "description": "Base URL for GitHub.com or your GitHub Enterprise instance, for example https://github.example.com." },
       { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 60, "max": 3600, "step": 60, "defaultValue": 900 },
       { "key": "linkBehavior", "type": "enum", "label": "Open links", "options": ["Browser tab", "Web app window"], "defaultValue": "Web app window", "description": "Open links in a browser tab, or in a dedicated web app window. The web app window requires a Chromium-based default browser." },
       { "key": "includeArchived", "type": "boolean", "label": "Include archived repositories", "defaultValue": false },

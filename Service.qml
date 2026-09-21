@@ -68,6 +68,7 @@ Item {
     // set. A caller added later inherits the guard instead of having to know.
     readonly property bool marking: markProcess.running
     readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 900, 60, 3600)
+    readonly property string githubUrl: normalizedGitHubUrl(setting("githubUrl", "https://github.com"))
     readonly property int unreadCount: notifications.length
     readonly property int actionCount: actions.length
     // A broken check on your own pull request is the kind of thing the bar icon
@@ -117,6 +118,11 @@ Item {
         return text === "true" || text === "yes" || text === "on" || text === "1";
     }
 
+    function normalizedGitHubUrl(value) {
+        var text = String(value || "").trim().replace(/\/+$/, "");
+        return text === "" ? "https://github.com" : text;
+    }
+
     // Matched against the known options rather than by substring, so an option
     // added later falls back to the narrower scope instead of silently widening
     // it. `fetchedRepositoryScope` reports what the last payload contained.
@@ -140,7 +146,7 @@ Item {
     }
 
     function command(automatic) {
-        var argv = [helperPath(), "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--include-contributions", includeContributions ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
+        var argv = [helperPath(), "--github-url", githubUrl, "--include-archived", boolSetting("includeArchived", false) ? "true" : "false", "--include-forks", boolSetting("includeForks", false) ? "true" : "false", "--repository-scope", repositoryMode(), "--include-archived-reviews", boolSetting("includeArchivedReviewRequests", false) ? "true" : "false", "--include-draft-reviews", boolSetting("includeDraftReviewRequests", false) ? "true" : "false", "--include-contributions", includeContributions ? "true" : "false", "--action-scan", actionMode(), "--action-repo-limit", String(intSetting("actionScanRepoLimit", 15, 5, 200)), "--concurrency", String(intSetting("actionScanConcurrency", 6, 1, 12)), "--failed-days", String(intSetting("failedActionDays", 7, 1, 30)), "--failed-limit", String(intSetting("failedActionLimit", 20, 1, 100))];
         if (automatic)
             argv = argv.concat(["--automatic", "--refresh-interval", String(refreshIntervalSec)]);
         return argv;
@@ -291,7 +297,7 @@ Item {
         notificationActionStatus = "Marking notification read…";
         _markStdout = "";
         _markStderr = "";
-        markProcess.command = [helperPath(), "--mark-notification-read", value];
+        markProcess.command = [helperPath(), "--github-url", githubUrl, "--mark-notification-read", value];
         markProcess.running = true;
         return true;
     }
@@ -451,7 +457,7 @@ Item {
         notificationActionStatus = "Marking all notifications read…";
         _markStdout = "";
         _markStderr = "";
-        var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];
+        var commandLine = [helperPath(), "--github-url", githubUrl, "--mark-all-read-before", String(snapshot.boundary || "")];
         for (var i = 0; i < snapshot.boundaryIds.length; i++)
             commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));
         markProcess.command = commandLine;

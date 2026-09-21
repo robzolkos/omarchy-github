@@ -10,6 +10,9 @@ bash -n "$HELPER"
 "$HELPER" --help >/dev/null
 if "$HELPER" --action-scan invalid >/dev/null 2>&1; then fail "invalid scan mode succeeded"; fi
 if "$HELPER" --repository-scope invalid >/dev/null 2>&1; then fail "invalid repository scope succeeded"; fi
+if "$HELPER" --github-url github.example.com >/dev/null 2>&1; then fail "URL without a scheme succeeded"; fi
+if "$HELPER" --github-url 'https://user@github.example.com' >/dev/null 2>&1; then fail "URL with credentials succeeded"; fi
+if "$HELPER" --github-url 'https://github.example.com?query=yes' >/dev/null 2>&1; then fail "URL with a query succeeded"; fi
 if "$HELPER" --failed-days 0 >/dev/null 2>&1; then fail "invalid failed window succeeded"; fi
 if "$HELPER" --mark-notification-read nope >/dev/null 2>&1; then fail "invalid notification id succeeded"; fi
 if "$HELPER" --mark-all-read-before nope >/dev/null 2>&1; then fail "invalid last-read timestamp succeeded"; fi
@@ -71,7 +74,11 @@ chmod +x "$sandbox/curl"
 
 cat >"$sandbox/gh" <<'GH'
 #!/usr/bin/env bash
-if [[ $1 == auth ]]; then printf '%s\n' 'ghp_test_token_for_cache_identity_1234567890'; exit 0; fi
+if [[ $1 == auth ]]; then
+  [[ ${GH_LOG_AUTH:-} == true ]] && printf '%s\n' "$*" >>"$GH_TEST_LOG"
+  printf '%s\n' 'ghp_test_token_for_cache_identity_1234567890'
+  exit 0
+fi
 if [[ $1 == api && $2 == --include && $3 == /rate_limit ]]; then
   printf '%s\n\n%s\n' 'HTTP/2.0 200 OK' '{"resources":{"core":{"remaining":5000,"reset":1893456000}}}'
   exit 0
@@ -131,20 +138,23 @@ fi
 endpoint=${*: -1}
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
 if [[ $endpoint == /notifications* ]]; then
-  cat <<'JSON'
-[{"id":"123","unread":true,"reason":"mention","updated_at":"2026-01-03T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Review this","type":"PullRequest","url":"https://api.github.com/repos/octocat/hello/pulls/7","latest_comment_url":null}},{"id":"124","unread":true,"reason":"subscribed","updated_at":"2026-01-02T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"https://github.com/octocat/hello"},"subject":{"title":"Unknown subject","type":"RepositoryVulnerabilityAlert","url":"https://api.github.com/repos/octocat/hello/private-vulnerability-reporting/1","latest_comment_url":"https://api.github.com/repos/octocat/hello/comments/1"}}]
+  if [[ $GH_HOST == github.com ]]; then web=https://github.com; api=https://api.github.com; else web=${GH_ENTERPRISE_WEB_URL:-https://$GH_HOST}; api=$web/api/v3; fi
+  cat <<JSON
+[{"id":"123","unread":true,"reason":"mention","updated_at":"2026-01-03T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"$web/octocat/hello"},"subject":{"title":"Review this","type":"PullRequest","url":"$api/repos/octocat/hello/pulls/7","latest_comment_url":null}},{"id":"124","unread":true,"reason":"subscribed","updated_at":"2026-01-02T00:00:00Z","repository":{"full_name":"octocat/hello","html_url":"$web/octocat/hello"},"subject":{"title":"Unknown subject","type":"RepositoryVulnerabilityAlert","url":"$api/repos/octocat/hello/private-vulnerability-reporting/1","latest_comment_url":"$api/repos/octocat/hello/comments/1"}}]
 JSON
   exit 0
 fi
 if [[ $endpoint == /search/issues\?q=is%3Aopen+is%3Apr* ]]; then
-  cat <<'JSON'
-{"items":[{"id":71,"number":7,"title":"Please review","repository_url":"https://api.github.com/repos/octocat/hello","html_url":"https://github.com/octocat/hello/pull/7","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
+  if [[ $GH_HOST == github.com ]]; then web=https://github.com; api=https://api.github.com; else web=${GH_ENTERPRISE_WEB_URL:-https://$GH_HOST}; api=$web/api/v3; fi
+  cat <<JSON
+{"items":[{"id":71,"number":7,"title":"Please review","repository_url":"$api/repos/octocat/hello","html_url":"$web/octocat/hello/pull/7","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
 JSON
   exit 0
 fi
 if [[ $endpoint == /search/issues\?q=is%3Aopen+is%3Aissue* ]]; then
-  cat <<'JSON'
-{"items":[{"id":81,"number":8,"title":"Fix it","repository_url":"https://api.github.com/repos/octocat/hello","html_url":"https://github.com/octocat/hello/issues/8","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
+  if [[ $GH_HOST == github.com ]]; then web=https://github.com; api=https://api.github.com; else web=${GH_ENTERPRISE_WEB_URL:-https://$GH_HOST}; api=$web/api/v3; fi
+  cat <<JSON
+{"items":[{"id":81,"number":8,"title":"Fix it","repository_url":"$api/repos/octocat/hello","html_url":"$web/octocat/hello/issues/8","updated_at":"2026-01-02T00:00:00Z","user":{"login":"friend"}}]}
 JSON
   exit 0
 fi
@@ -199,6 +209,13 @@ grep -q -- '--paginate.*status=queued' "$GH_TEST_LOG" || fail "queued Actions re
 grep -q 'status=completed.*created=%3E%3D' "$GH_TEST_LOG" || fail "completed Actions request was not date bounded"
 grep -q 'review-requested%3A%40me+draft%3Afalse+archived%3Afalse' "$GH_TEST_LOG" || fail "review request search was not draft and archive filtered"
 grep -q 'assignee%3A%40me+archived%3Afalse' "$GH_TEST_LOG" || fail "assigned issue search was not archive filtered"
+: >"$GH_TEST_LOG"
+enterprise_url=https://git.example.test/platform
+enterprise=$(GH_LOG_AUTH=true GH_ENTERPRISE_WEB_URL="$enterprise_url" PATH="$sandbox:$PATH" "$HELPER" --github-url "$enterprise_url/" --action-scan off)
+assert_jq '.notifications[0].url == "https://git.example.test/platform/octocat/hello/pull/7" and .notifications[1].url == "https://git.example.test/platform/octocat/hello"' "$enterprise" "enterprise notification URLs do not use the configured base URL"
+assert_jq '.reviewRequests[0].repository == "octocat/hello" and .assignedIssues[0].repository == "octocat/hello"' "$enterprise" "enterprise API repository URLs are not normalized"
+grep -q 'auth token -h git.example.test' "$GH_TEST_LOG" || fail "enterprise authentication did not use the configured host"
+grep -q 'https://git.example.test/platform/users/octocat/contributions' "$GH_TEST_LOG" || fail "enterprise contribution calendar did not use the configured URL"
 : >"$GH_TEST_LOG"
 out_archived_reviews=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan off --include-archived-reviews true)
 assert_jq '(.reviewRequests|length == 1) and (.assignedIssues|length == 1)' "$out_archived_reviews" "searches still return with archived included"

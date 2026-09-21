@@ -2,15 +2,19 @@ import QtQml
 
 QtObject {
   property string linkBehavior: "Web app window"
+  property string githubUrl: "https://github.com"
 
   signal browserLaunchRequested(var argv)
   signal webAppLaunchRequested(var argv)
 
   function isAllowedUrl(url) {
     var value = String(url || "")
-    // Links in this plugin are GitHub destinations. Keep the authority exact:
-    // accepting arbitrary HTTPS URLs would let API data select another host.
-    return /^https:\/\/github[.]com(?:[\/?#]|$)/.test(value)
+    var base = String(githubUrl || "").replace(/\/+$/, "")
+    if (!/^https?:\/\/[^\/?#]+(?:\/[^?#]*)?$/.test(base)) return false
+    // API data may supply link targets, so constrain them to the configured
+    // GitHub origin and optional installation path.
+    var escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    return new RegExp("^" + escaped + "(?:[/?#]|$)").test(value)
   }
 
   function openUrl(url) {

@@ -3,6 +3,7 @@
 # Authentication is delegated entirely to the gh CLI credential store.
 set -uo pipefail
 
+github_url="https://github.com"
 include_archived=false
 include_forks=false
 include_archived_reviews=false
@@ -23,6 +24,8 @@ refresh_interval=900
 usage() {
   cat <<'EOF'
 Usage: omarchy-github-fetch [options]
+  --github-url URL              GitHub.com or GitHub Enterprise base URL
+                                (default: https://github.com)
   --include-archived BOOL       Include archived repositories (default: false)
   --include-forks BOOL          Include repositories that are forks (default: false)
   --include-archived-reviews BOOL
@@ -55,6 +58,7 @@ integer() { [[ $1 =~ ^[0-9]+$ ]]; }
 
 while (($#)); do
   case "$1" in
+    --github-url) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; github_url=$2; shift 2 ;;
     --include-archived) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived=$2; shift 2 ;;
     --include-forks) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_forks=$2; shift 2 ;;
     --include-archived-reviews) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; include_archived_reviews=$2; shift 2 ;;
@@ -83,6 +87,21 @@ if ! integer "$failed_limit" || ((failed_limit < 1 || failed_limit > 100)); then
 if ! integer "$refresh_interval" || ((refresh_interval < 60 || refresh_interval > 3600)); then echo "invalid --refresh-interval" >&2; exit 2; fi
 [[ $action_scan == off || $action_scan == recent || $action_scan == all ]] || { echo "invalid --action-scan" >&2; exit 2; }
 [[ $repository_scope == owned || $repository_scope == organizations ]] || { echo "invalid --repository-scope" >&2; exit 2; }
+github_url=${github_url%"${github_url##*[!/]}"}
+if [[ ! $github_url =~ ^https?://[^/?#]+(/[^?#]*)?$ ]]; then echo "invalid --github-url" >&2; exit 2; fi
+github_authority=${github_url#*://}
+github_authority=${github_authority%%/*}
+[[ -n $github_authority && $github_authority != *@* ]] || { echo "invalid --github-url" >&2; exit 2; }
+export GH_HOST="$github_authority"
+github_authority_lower=${github_authority,,}
+github_scheme=${github_url%%://*}
+if [[ $github_authority_lower == github.com ]]; then
+  github_api_url="https://api.github.com"
+elif [[ $github_authority_lower == *.ghe.com ]]; then
+  github_api_url="$github_scheme://api.$github_authority"
+else
+  github_api_url="$github_url/api/v3"
+fi
 # Interpolated into the GraphQL document, so it comes from the validated enum
 # above. The argument itself never reaches the query.
 if [[ $repository_scope == organizations ]]; then repository_affiliations="[OWNER,ORGANIZATION_MEMBER]"; else repository_affiliations="OWNER"; fi
@@ -123,9 +142,15 @@ command -v sha256sum >/dev/null 2>&1 || { emit_state error "sha256sum is require
 # Capture the exact credential that gh will use, including its documented
 # environment precedence. Pin every request in this process to that value so an
 # account switch cannot race the cache identity or a long-running refresh.
-credential_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+if [[ $github_authority_lower == github.com || $github_authority_lower == *.ghe.com ]]; then
+  credential_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
+  token_environment=GH_TOKEN
+else
+  credential_token=${GH_ENTERPRISE_TOKEN:-${GITHUB_ENTERPRISE_TOKEN:-}}
+  token_environment=GH_ENTERPRISE_TOKEN
+fi
 if [[ -z $credential_token ]]; then
-  credential_token=$(gh auth token -h github.com 2>/dev/null) || {
+  credential_token=$(gh auth token -h "$GH_HOST" 2>/dev/null) || {
     emit_state logged-out "Sign in with gh auth login to load GitHub data."
     exit 0
   }
@@ -134,13 +159,14 @@ if [[ -z $credential_token ]]; then
   emit_state logged-out "Sign in with gh auth login to load GitHub data."
   exit 0
 fi
-credential_fingerprint=$(printf '%s' "$credential_token" | sha256sum | cut -d' ' -f1)
+credential_fingerprint=$(printf '%s\n%s' "$github_url" "$credential_token" | sha256sum | cut -d' ' -f1)
 if [[ ! $credential_fingerprint =~ ^[0-9a-f]{64}$ ]]; then
   emit_state error "Could not identify the active GitHub credential."
   exit 1
 fi
-export GH_TOKEN="$credential_token"
-unset GITHUB_TOKEN credential_token
+unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN
+export "$token_environment=$credential_token"
+unset credential_token
 
 normalized_bool() {
   if bool "$1"; then printf true; else printf false; fi
@@ -153,6 +179,7 @@ refresh_policy_fingerprint() {
     "include_archived_reviews=$(normalized_bool "$include_archived_reviews")" \
     "include_draft_reviews=$(normalized_bool "$include_draft_reviews")" \
     "include_contributions=$(normalized_bool "$include_contributions")" \
+    "github_url=$github_url" \
     "repository_scope=$repository_scope" \
     "action_scan=$action_scan" \
     "action_limit=$action_limit" \
@@ -448,15 +475,17 @@ if fetch_paginated notifications '/notifications?all=false&participating=false&p
   # Notification subjects use API URLs whose path semantics vary by type.
   # Convert only known types and fall back to the repository for everything
   # else rather than opening an API endpoint or manufacturing a broken URL.
-  jq -s '[.[][] | select(.unread == true) |
-    (if (.repository.html_url // "") != "" then .repository.html_url elif (.repository.full_name // "") != "" then ("https://github.com/" + .repository.full_name) else "https://github.com/notifications" end) as $fallback |
-    (.subject.url // "") as $api |
+  jq -s --arg web "$github_url" --arg api "$github_api_url" '[.[][] | select(.unread == true) |
+    ($api + "/repos/") as $api_repos |
+    (if (.repository.html_url // "") != "" then .repository.html_url elif (.repository.full_name // "") != "" then ($web + "/" + .repository.full_name) else ($web + "/notifications") end) as $fallback |
+    (.subject.url // "") as $subject_api |
+    (if ($subject_api | startswith($api_repos)) then $subject_api[($api_repos | length):] else "" end) as $path |
     {id:(.id // ""),reason:(.reason // ""),updatedAt:(.updated_at // ""),
      repository:(.repository.full_name // ""),title:(.subject.title // ""),type:(.subject.type // ""),
-     url:(if .subject.type == "PullRequest" and ($api|test("^https://api\\.github\\.com/repos/[^/]+/[^/]+/pulls/[0-9]+$")) then ($api|sub("^https://api.github.com/repos/";"https://github.com/")|sub("/pulls/";"/pull/"))
-          elif .subject.type == "Issue" and ($api|test("^https://api\\.github\\.com/repos/[^/]+/[^/]+/issues/[0-9]+$")) then ($api|sub("^https://api.github.com/repos/";"https://github.com/"))
-          elif .subject.type == "Commit" and ($api|test("^https://api\\.github\\.com/repos/[^/]+/[^/]+/commits/[0-9a-fA-F]+$")) then ($api|sub("^https://api.github.com/repos/";"https://github.com/")|sub("/commits/";"/commit/"))
-          elif .subject.type == "Discussion" and ($api|test("^https://api\\.github\\.com/repos/[^/]+/[^/]+/discussions/[0-9]+$")) then ($api|sub("^https://api.github.com/repos/";"https://github.com/"))
+     url:(if .subject.type == "PullRequest" and ($path|test("^[^/]+/[^/]+/pulls/[0-9]+$")) then ($web + "/" + ($path|sub("/pulls/";"/pull/")))
+          elif .subject.type == "Issue" and ($path|test("^[^/]+/[^/]+/issues/[0-9]+$")) then ($web + "/" + $path)
+          elif .subject.type == "Commit" and ($path|test("^[^/]+/[^/]+/commits/[0-9a-fA-F]+$")) then ($web + "/" + ($path|sub("/commits/";"/commit/")))
+          elif .subject.type == "Discussion" and ($path|test("^[^/]+/[^/]+/discussions/[0-9]+$")) then ($web + "/" + $path)
           else $fallback end)}] | sort_by(.updatedAt) | reverse' "$tmp/notifications.pages" >"$tmp/notifications.json" 2>/dev/null || { printf '[]\n' >"$tmp/notifications.json"; printf '%s\n' 'notifications: invalid API response' >>"$warnings"; }
 else printf '[]\n' >"$tmp/notifications.json"; fi
 
@@ -464,7 +493,7 @@ fetch_search() {
   local label=$1 query=$2 output=$3
   local pages="$tmp/$label.pages"
   if fetch_paginated "$label" "/search/issues?q=$query&per_page=100" "$pages"; then
-    jq -s '[.[] | .items[]? | {id:(.id|tostring),number,title:(.title // ""),repository:(.repository_url // "" | sub("^https://api.github.com/repos/";"")),url:(.html_url // ""),updatedAt:(.updated_at // ""),user:(.user.login // ""),draft:(.draft // false)}] | sort_by(.updatedAt) | reverse' "$pages" >"$output" 2>/dev/null || { printf '[]\n' >"$output"; printf '%s: invalid API response\n' "$label" >>"$warnings"; }
+    jq -s --arg prefix "$github_api_url/repos/" '[.[] | .items[]? | {id:(.id|tostring),number,title:(.title // ""),repository:(.repository_url // "" | if startswith($prefix) then .[($prefix|length):] else . end),url:(.html_url // ""),updatedAt:(.updated_at // ""),user:(.user.login // ""),draft:(.draft // false)}] | sort_by(.updatedAt) | reverse' "$pages" >"$output" 2>/dev/null || { printf '[]\n' >"$output"; printf '%s: invalid API response\n' "$label" >>"$warnings"; }
   else printf '[]\n' >"$output"; fi
 }
 # An archived repository is read-only, so the request cannot be withdrawn and
@@ -565,8 +594,8 @@ if bool "$include_contributions"; then
   profile_contributions_ok=false
   if command -v curl >/dev/null 2>&1 && [[ ${login:-} =~ ^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$ ]]; then
     if curl --fail --silent --show-error --location --max-redirs 3 --connect-timeout 5 --max-time 20 \
-      --proto '=https' --proto-redir '=https' -H 'Accept: text/html' -H 'Accept-Language: en-US' \
-      "https://github.com/users/$login/contributions" >"$tmp/contributions.html" 2>"$tmp/contributions-profile.err" &&
+      --proto '=http,https' --proto-redir '=http,https' -H 'Accept: text/html' -H 'Accept-Language: en-US' \
+      "$github_url/users/$login/contributions" >"$tmp/contributions.html" 2>"$tmp/contributions-profile.err" &&
       jq -Rse '
         [scan("(<td[^>]*>)[[:space:]]*</td>[[:space:]]*<tool-tip[^>]*>(No contributions|[0-9,]+ contributions?)[^<]*</tool-tip>") as [$cell,$label]
           | ($cell | capture("data-date=\\\"(?<date>[0-9]{4}-[0-9]{2}-[0-9]{2})\\\"").date) as $date

@@ -299,6 +299,7 @@ Panel {
   UrlLauncher {
     id: urlLauncher
     linkBehavior: github.linkBehavior
+    githubUrl: github.githubUrl
     // Both launchers receive an argv array; no URL is interpreted by a shell.
     onBrowserLaunchRequested: function(argv) { Util.execArgv(argv) }
     onWebAppLaunchRequested: function(argv) { Quickshell.execDetached(argv) }
@@ -559,7 +560,7 @@ Panel {
             footerButtonsBordered: true
             page: root.notificationsPage
             pageCount: root.notificationPageCount()
-            openUrl: "https://github.com/notifications"
+            openUrl: github.githubUrl + "/notifications"
             onPreviousPage: root.notificationsPage = Math.max(0, root.notificationsPage - 1)
             onNextPage: root.notificationsPage = Math.min(root.notificationPageCount() - 1, root.notificationsPage + 1)
             delegateComponent: notificationDelegate
@@ -580,7 +581,7 @@ Panel {
             count: github.reviewRequests.length
             model: root.sectionRows(github.reviewRequests, root.reviewsExpanded)
             expanded: root.reviewsExpanded
-            openUrl: "https://github.com/pulls/review-requested"
+            openUrl: github.githubUrl + "/pulls/review-requested"
             onToggleExpanded: root.reviewsExpanded = !root.reviewsExpanded
             delegateComponent: reviewDelegate
           }
@@ -594,7 +595,7 @@ Panel {
             count: Math.max(github.myPullRequestsTotal, github.myPullRequests.length)
             model: root.sectionRows(github.myPullRequests, root.myPullsExpanded)
             expanded: root.myPullsExpanded
-            openUrl: "https://github.com/pulls"
+            openUrl: github.githubUrl + "/pulls"
             onToggleExpanded: root.myPullsExpanded = !root.myPullsExpanded
             delegateComponent: myPullRequestDelegate
           }
@@ -606,7 +607,7 @@ Panel {
             model: root.sectionRows(github.assignedIssues, root.issuesExpanded)
             expanded: root.issuesExpanded
             footerButtonsBordered: true
-            openUrl: "https://github.com/issues/assigned"
+            openUrl: github.githubUrl + "/issues/assigned"
             onToggleExpanded: root.issuesExpanded = !root.issuesExpanded
             delegateComponent: issueDelegate
           }
@@ -1572,7 +1573,7 @@ Panel {
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
-                    if (block.login !== "") root.openUrl("https://github.com/" + block.login)
+                    if (block.login !== "") root.openUrl(github.githubUrl + "/" + block.login)
                   }
                   PanelToolTip {
                     visible: dayMouse.containsMouse && String(dayCell.modelData.date || "") !== ""
