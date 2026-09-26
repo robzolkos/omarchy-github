@@ -179,13 +179,17 @@ assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/
 assert_jq '(.actions|length == 1) and (.failedActions|length == 1)' "$out" "active and failed actions separated"
 assert_jq '.repositoryScope == "owned"' "$out" "default repository scope reported"
 assert_jq '.rateLimit.remaining == 4999 and (.warnings|length) == 0' "$out" "rate limit and warnings"
-assert_jq '(.contributions.total == 15) and (.contributions.days|length == 369)' "$out" "contribution calendar matches the profile graph"
-assert_jq '[.contributions.days[0:2][].level] == [1,4]' "$out" "profile contribution levels map to the five panel levels"
-assert_jq '(.contributions.days[0].count == 1 and .contributions.days[0].level == 1) and (.contributions.days[1].count == 14 and .contributions.days[1].level == 4)' "$out" "profile contribution counts and levels stay paired by date"
-grep -q 'https://github.com/users/octocat/contributions' "$GH_TEST_LOG" || fail "contribution calendar did not request the profile graph"
-if grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG"; then fail "contribution calendar used GraphQL despite a valid profile response"; fi
+assert_jq '(.contributions.total == 14) and (.contributions.days|length == 14)' "$out" "contribution calendar comes from the signed-in GraphQL calendar"
+assert_jq '[.contributions.days[0:5][].level] == [0,1,2,3,4]' "$out" "GraphQL contribution levels map to the five panel levels"
+assert_jq '(.contributions.days[1].count == 1 and .contributions.days[1].level == 1) and (.contributions.days[4].count == 7 and .contributions.days[4].level == 4)' "$out" "GraphQL contribution counts and levels stay paired by date"
+grep -q 'contributionsCollection.*contributionLevel' "$GH_TEST_LOG" || fail "contribution calendar did not request the GraphQL calendar"
+if grep -q 'https://github.com/users/octocat/contributions' "$GH_TEST_LOG"; then fail "contribution calendar scraped the UTC profile graph despite a valid GraphQL response"; fi
+profile_fallback=$(GH_INVALID_CONTRIBUTIONS=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
+assert_jq '(.contributions.total == 15) and (.contributions.days|length == 369) and (.warnings|length == 0)' "$profile_fallback" "an invalid GraphQL calendar falls back to the profile graph without a warning"
+assert_jq '(.contributions.days[0].count == 1 and .contributions.days[0].level == 1) and (.contributions.days[1].count == 14 and .contributions.days[1].level == 4)' "$profile_fallback" "profile contribution counts and levels stay paired by date"
+grep -q 'https://github.com/users/octocat/contributions' "$GH_TEST_LOG" || fail "GraphQL fallback did not request the profile graph"
 invalid_contributions=$(CURL_INVALID_CONTRIBUTIONS=true GH_INVALID_CONTRIBUTIONS=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
-assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and (.warnings|index("contributions: invalid API response") != null)' "$invalid_contributions" "invalid profile and API contribution payloads fall back with a warning"
+assert_jq '(.contributions.total == 0) and (.contributions.days|length == 0) and (.warnings|index("contributions: invalid API response") != null)' "$invalid_contributions" "invalid API and profile contribution payloads fall back with a warning"
 contribution_rate=$(CURL_FAIL_CONTRIBUTIONS=true GH_CONTRIBUTION_RATE=true PATH="$sandbox:$PATH" "$HELPER" --action-scan off)
 assert_jq '.rateLimit.remaining == 0 and .rateLimit.cost == 1 and .state == "rate-limited"' "$contribution_rate" "contribution API fallback updates the displayed rate limit"
 grep -q 'contributionsCollection.*rateLimit.*remaining' "$GH_TEST_LOG" || fail "contribution fallback did not request the final rate limit"
