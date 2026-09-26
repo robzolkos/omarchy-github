@@ -202,9 +202,9 @@ The shell watches local plugin files, making QML iteration fast.
 
 ## How it works
 
-`Service.qml` schedules an executable helper, `omarchy-github-fetch`, which uses `gh api` for authenticated GitHub data, reads the public profile contribution graph with `curl`, and processes responses with `jq`.
+`Service.qml` schedules an executable helper, `omarchy-github-fetch`, which uses `gh api` for authenticated GitHub data, falls back to the public profile contribution graph with `curl` when needed, and processes responses with `jq`.
 
-- The profile graph fragment supplies contribution totals, daily counts, and levels that exactly match the GitHub profile. GraphQL provides a fallback if the fragment is unavailable.
+- The signed-in GraphQL contribution calendar supplies contribution totals, daily counts, and levels. It buckets days in the time zone set on your GitHub account, which is what your profile shows you; the public profile fragment is rendered in UTC for anonymous requests and shifts evening activity onto the next day. The fragment remains a fallback if GraphQL is unavailable.
 - GraphQL retrieves every repository in the configured scope and exact aggregate counts.
 - REST retrieves notifications and workflow runs.
 - GitHub issue search retrieves review requests and assigned issues.
