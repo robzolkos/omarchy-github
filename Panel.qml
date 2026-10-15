@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 Panel {
@@ -12,8 +13,8 @@ Panel {
   ipcTarget: "robzolkos.github"
   manageIpc: false
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color urgent: bar ? bar.urgent : Commons.Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   property string query: ""
@@ -845,7 +846,7 @@ Panel {
                 description: "Render the year-long contribution heatmap in the dashboard."
                 checked: github.includeContributions
                 foreground: root.foreground
-                accent: Color.accent
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onClicked: root.persistSettings({ includeContributions: !github.includeContributions })
               }
@@ -864,8 +865,8 @@ Panel {
                 showLabel: false
                 options: root.contributionsPositionOptions
                 foreground: root.foreground
-                background: Color.popups.background
-                accent: Color.accent
+                background: Commons.Color.popups.background
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onChanged: function(value) { root.persistSettings({ contributionsPosition: value }) }
 
@@ -891,8 +892,8 @@ Panel {
                 showLabel: false
                 options: root.linkBehaviorOptions
                 foreground: root.foreground
-                background: Color.popups.background
-                accent: Color.accent
+                background: Commons.Color.popups.background
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onChanged: function(value) { root.persistSettings({ linkBehavior: value }) }
 
@@ -920,8 +921,8 @@ Panel {
                 showLabel: false
                 options: root.repositoryScopeOptions
                 foreground: root.foreground
-                background: Color.popups.background
-                accent: Color.accent
+                background: Commons.Color.popups.background
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onChanged: function(value) { root.persistSettings({ repositoryScope: value }) }
 
@@ -947,8 +948,8 @@ Panel {
                 showLabel: false
                 options: root.refreshIntervalOptions
                 foreground: root.foreground
-                background: Color.popups.background
-                accent: Color.accent
+                background: Commons.Color.popups.background
+                accent: Commons.Color.accent
                 fontFamily: root.fontFamily
                 onChanged: function(value) { root.persistSettings({ refreshIntervalSec: parseInt(value, 10) }) }
 
@@ -968,7 +969,7 @@ Panel {
               description: "Leave the Octocat dim even when notifications, reviews, or failing actions are waiting."
               checked: github.iconAlwaysUnlit
               foreground: root.foreground
-              accent: Color.accent
+              accent: Commons.Color.accent
               fontFamily: root.fontFamily
               onClicked: root.persistSettings({ iconAlwaysUnlit: !github.iconAlwaysUnlit })
             }
@@ -979,7 +980,7 @@ Panel {
               description: "Show repositories that have been archived on GitHub."
               checked: root.setting("includeArchived", false) === true
               foreground: root.foreground
-              accent: Color.accent
+              accent: Commons.Color.accent
               fontFamily: root.fontFamily
               onClicked: root.persistSettings({ includeArchived: !(root.setting("includeArchived", false) === true) })
             }
@@ -990,7 +991,7 @@ Panel {
               description: "Show repositories you forked from someone else."
               checked: root.setting("includeForks", false) === true
               foreground: root.foreground
-              accent: Color.accent
+              accent: Commons.Color.accent
               fontFamily: root.fontFamily
               onClicked: root.persistSettings({ includeForks: !(root.setting("includeForks", false) === true) })
             }
@@ -1398,7 +1399,7 @@ Panel {
         iconText: github.markingNotificationId === linkRow.notificationId ? "󰑐" : "󰄬"
         tooltipText: "Mark this notification read (M)"
         foreground: root.foreground
-        hoverColor: Color.accent
+        hoverColor: Commons.Color.accent
         fontFamily: root.fontFamily
         bordered: false
         onClicked: github.markNotificationRead(linkRow.notificationId)
