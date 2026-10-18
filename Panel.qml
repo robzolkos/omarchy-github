@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -445,13 +446,22 @@ Panel {
                   height: Style.space(22)
                   opacity: github.loading ? 1 : 0
 
-                  Text {
+                  // Drawn so it turns around the circle's center. A font glyph's box is
+                  // not centered on its circle, so rotating it wobbles.
+                  Shape {
+                    id: spinner
                     anchors.centerIn: parent
-                    text: "󰑐"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.icon
-                    transformOrigin: Item.Center
+                    width: Math.round(Style.font.icon * 0.85)
+                    height: width
+                    preferredRendererType: Shape.CurveRenderer
+
+                    readonly property real stroke: Math.max(1.5, Style.font.icon / 9)
+                    readonly property real head: stroke * 1.6
+                    readonly property real radius: width / 2 - head
+                    readonly property real sweep: 270
+                    readonly property real endRad: sweep * Math.PI / 180
+                    readonly property real endX: width / 2 + radius * Math.cos(endRad)
+                    readonly property real endY: height / 2 + radius * Math.sin(endRad)
 
                     RotationAnimation on rotation {
                       from: 0
@@ -459,6 +469,39 @@ Panel {
                       duration: 900
                       loops: Animation.Infinite
                       running: github.loading
+                    }
+
+                    ShapePath {
+                      strokeColor: root.dim
+                      strokeWidth: spinner.stroke
+                      fillColor: "transparent"
+                      capStyle: ShapePath.FlatCap
+
+                      PathAngleArc {
+                        centerX: spinner.width / 2
+                        centerY: spinner.height / 2
+                        radiusX: spinner.radius
+                        radiusY: spinner.radius
+                        startAngle: 0
+                        sweepAngle: spinner.sweep
+                      }
+                    }
+
+                    // Arrowhead at the end of the arc, pointing along it.
+                    ShapePath {
+                      strokeColor: "transparent"
+                      fillColor: root.dim
+                      startX: spinner.endX + spinner.head * Math.cos(spinner.endRad)
+                      startY: spinner.endY + spinner.head * Math.sin(spinner.endRad)
+
+                      PathLine {
+                        x: spinner.endX - spinner.head * Math.sin(spinner.endRad) * 1.2
+                        y: spinner.endY + spinner.head * Math.cos(spinner.endRad) * 1.2
+                      }
+                      PathLine {
+                        x: spinner.endX - spinner.head * Math.cos(spinner.endRad)
+                        y: spinner.endY - spinner.head * Math.sin(spinner.endRad)
+                      }
                     }
                   }
 

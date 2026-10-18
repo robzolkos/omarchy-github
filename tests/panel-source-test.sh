@@ -40,7 +40,9 @@ assert_contains $'width: Style.space(22)\n                  height: Style.space(
   "the refresh spinner still collapses and shifts the gear"
 assert_not_contains 'width: visible ? Style.space(22) : 0' \
   "the refresh spinner still collapses and shifts the gear"
-assert_contains $'text: "󰑐"\n                    color: root.dim\n                    font.family: root.fontFamily\n                    font.pixelSize: Style.font.icon\n                    transformOrigin: Item.Center\n\n                    RotationAnimation on rotation {\n                      from: 0\n                      to: 360\n                      duration: 900\n                      loops: Animation.Infinite\n                      running: github.loading' \
+assert_contains $'Shape {\n                    id: spinner\n                    anchors.centerIn: parent' \
+  "the refresh spinner does not rotate around the circle's center"
+assert_contains $'RotationAnimation on rotation {\n                      from: 0\n                      to: 360\n                      duration: 900\n                      loops: Animation.Infinite\n                      running: github.loading' \
   "a fetch in flight does not show a centered, continuously rotating spinner"
 assert_contains $'hoverEnabled: github.loading\n                    enabled: github.loading\n                    acceptedButtons: Qt.NoButton\n\n                    PanelToolTip {\n                      visible: parent.containsMouse\n                      text: "Updating from GitHub"' \
   "the refresh spinner tooltip is not hover-only or intercepts clicks"
