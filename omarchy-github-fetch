@@ -3,6 +3,7 @@
 # Authentication is delegated entirely to the gh CLI credential store.
 set -uo pipefail
 
+original_args=("$@")
 include_archived=false
 include_forks=false
 include_archived_reviews=false
@@ -17,6 +18,7 @@ failed_limit=20
 mark_notification=""
 mark_all_before=""
 mark_boundary_notifications=()
+account=""
 automatic=false
 refresh_interval=900
 
@@ -45,6 +47,10 @@ Usage: omarchy-github-fetch [options]
   --mark-boundary-notification ID
                                 Preserve same-second arrivals by marking only
                                 the fetched boundary thread ID (repeatable)
+  --account LOGIN               Act as this gh login on github.com, with its own
+                                token and cache. Without it, every login gh holds
+                                is fetched and merged, unless GH_TOKEN or
+                                GITHUB_TOKEN is set or gh holds only one.
   --automatic                   Honor cache freshness for a scheduled refresh
   --refresh-interval N          Automatic refresh interval in seconds
 EOF
@@ -69,6 +75,7 @@ while (($#)); do
     --mark-notification-read) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_notification=$2; shift 2 ;;
     --mark-all-read-before) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_all_before=$2; shift 2 ;;
     --mark-boundary-notification) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; mark_boundary_notifications+=("$2"); shift 2 ;;
+    --account) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; [[ $2 =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || { echo "invalid --account" >&2; exit 2; }; account=$2; shift 2 ;;
     --automatic) automatic=true; shift ;;
     --refresh-interval) [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 2; }; refresh_interval=$2; shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -89,6 +96,12 @@ if [[ $repository_scope == organizations ]]; then repository_affiliations="[OWNE
 
 emit_state() {
   jq -n --arg state "$1" --arg message "$2" --arg scope "$repository_scope" '{schemaVersion:1,state:$state,message:$message,login:"",repositoryScope:$scope,fetchedAt:(now|todateiso8601),notifications:[],reviewRequests:[],assignedIssues:[],myPullRequests:[],myPullRequestsTotal:0,actions:[],failedActions:[],repositories:[],warnings:[],contributions:{total:0,days:[]},rateLimit:null}'
+}
+
+error_detail() {
+  tr '\n' ' ' <"$1" |
+    sed -E 's/(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/[REDACTED]/g; s/(Authorization: *(token|Bearer) +)[^ ]+/\1[REDACTED]/Ig; s/[[:space:]]+/ /g; s/^ //; s/ $//' |
+    cut -c1-240
 }
 
 command -v jq >/dev/null 2>&1 || { printf '%s\n' '{"schemaVersion":1,"state":"error","message":"jq is required.","notifications":[],"reviewRequests":[],"assignedIssues":[],"myPullRequests":[],"myPullRequestsTotal":0,"actions":[],"failedActions":[],"repositories":[],"warnings":[],"contributions":{"total":0,"days":[]}}' ; exit 0; }
@@ -120,11 +133,98 @@ fi
 command -v gh >/dev/null 2>&1 || { emit_state gh-not-installed "GitHub CLI is not installed or not on PATH."; exit 0; }
 command -v sha256sum >/dev/null 2>&1 || { emit_state error "sha256sum is required for private GitHub cache identity."; exit 1; }
 
+# Logins gh holds for github.com, one per line. Anything unexpected (a gh
+# without `auth status --json`, an unreadable answer) yields no logins, which
+# leaves the single-credential path below in charge.
+discover_accounts() {
+  gh auth status --hostname github.com --json hosts 2>/dev/null |
+    jq -r '[.hosts["github.com"][]?.login | strings | select(test("^[A-Za-z0-9][A-Za-z0-9_-]*$"))] | unique[]' 2>/dev/null
+}
+
+# Scan each login as its own helper process, so every account keeps its own
+# token, cache, lock and rate-limit state, then merge the payloads. A login
+# that fails is reported as that account's state instead of failing the rest.
+fetch_all_accounts() {
+  local dir login detail index=0 files=()
+  if ! dir=$(mktemp -d); then
+    emit_state error "Could not prepare temporary storage for the GitHub refresh."
+    exit 1
+  fi
+  trap 'rm -rf "$dir"' EXIT
+  for login in "$@"; do
+    "${BASH_SOURCE[0]}" "${original_args[@]}" --account "$login" >"$dir/$index.json" 2>"$dir/$index.err" </dev/null &
+    index=$((index + 1))
+  done
+  wait
+  index=0
+  for login in "$@"; do
+    if ! jq -e 'type == "object" and .schemaVersion == 1 and (.state | type) == "string"' "$dir/$index.json" >/dev/null 2>&1; then
+      detail=$(error_detail "$dir/$index.err")
+      emit_state error "${detail:-GitHub data refresh failed.}" >"$dir/$index.json"
+    fi
+    jq --arg account "$login" '. + {account:$account}' "$dir/$index.json" >"$dir/$index.account" && files+=("$dir/$index.account")
+    index=$((index + 1))
+  done
+  jq -s --arg scope "$repository_scope" '
+    def rows($key): [.[] | .account as $account | (.[$key] // [])[] | . + {account:$account}];
+    # Levels are relative to an account'"'"'s own busiest days, so they cannot be
+    # added. Summed days are rescaled against the busiest summed day instead.
+    def calendar:
+      [.[] | .contributions.days[]?] | group_by(.date)
+      | map({date:.[0].date, count:(map(.count) | add)})
+      | (map(.count) | max // 0) as $peak
+      | map(. + {level:(if .count == 0 then 0 else ([4, ((4 * .count / $peak) | ceil)] | min) end)});
+    . as $accounts
+    | ($accounts | map(.state) | unique) as $states
+    | (if ($states | index("ready")) != null then "ready" elif ($states | length) == 1 then $states[0] else "error" end) as $state
+    | ($accounts | map(.message // "") | unique) as $messages
+    | ([$accounts[] | .rateLimit | select(type == "object")]) as $limits
+    | {schemaVersion:1,
+       state:$state,
+       message:(if $state == "ready" then ""
+                elif ($messages | length) == 1 then $messages[0]
+                else ($accounts | map("\(.account): \(.message // "")") | join("; ")) end),
+       preserveDashboard:($state == "rate-limited" and ($accounts | all(.preserveDashboard == true))),
+       login:"",
+       repositoryScope:$scope,
+       fetchedAt:($accounts | map(.fetchedAt // "") | max),
+       accounts:[$accounts[] | {login:.account,state,message:(.message // ""),fetchedAt:(.fetchedAt // ""),rateLimit:(.rateLimit // null),
+                                myPullRequestsTotal:(.myPullRequestsTotal // 0),contributions:(.contributions // {total:0,days:[]})}],
+       notifications:($accounts | rows("notifications") | sort_by(.updatedAt) | reverse),
+       reviewRequests:($accounts | rows("reviewRequests") | sort_by(.updatedAt) | reverse),
+       assignedIssues:($accounts | rows("assignedIssues") | sort_by(.updatedAt) | reverse),
+       myPullRequests:($accounts | rows("myPullRequests") | sort_by(.updatedAt) | reverse),
+       myPullRequestsTotal:($accounts | map(.myPullRequestsTotal // 0) | add),
+       actions:($accounts | rows("actions") | sort_by(.createdAt) | reverse),
+       failedActions:($accounts | rows("failedActions") | sort_by(.updatedAt) | reverse),
+       repositories:($accounts | rows("repositories") | sort_by(.updatedAt) | reverse),
+       contributions:{total:($accounts | map(.contributions.total // 0) | add),days:($accounts | calendar)},
+       warnings:([$accounts[] | .account as $account | (.warnings // [])[] | "\($account): \(.)"]
+                 + (if $state == "ready" then [$accounts[] | select(.state != "ready") | "\(.account): \(.message // "")"] else [] end)),
+       rateLimit:((($limits | map(select(.remaining | type == "number")) | min_by(.remaining)) // $limits[0]))}
+  ' "${files[@]}"
+  exit 0
+}
+
+# The environment decides first: a token there is the one credential gh itself
+# would use, so it keeps today's single-token behaviour.
+if [[ -z $account && -z $mark_notification && -z $mark_all_before && -z ${GH_TOKEN:-${GITHUB_TOKEN:-}} ]]; then
+  mapfile -t accounts < <(discover_accounts)
+  if ((${#accounts[@]} > 1)); then fetch_all_accounts "${accounts[@]}"; fi
+fi
+
 # Capture the exact credential that gh will use, including its documented
 # environment precedence. Pin every request in this process to that value so an
 # account switch cannot race the cache identity or a long-running refresh.
 credential_token=${GH_TOKEN:-${GITHUB_TOKEN:-}}
-if [[ -z $credential_token ]]; then
+if [[ -n $account ]]; then
+  # An explicit account outranks the environment, so a mark can only go out
+  # as the login its row came from.
+  credential_token=$(gh auth token -h github.com --user "$account" 2>/dev/null) || {
+    emit_state logged-out "Sign in with gh auth login to load GitHub data."
+    exit 0
+  }
+elif [[ -z $credential_token ]]; then
   credential_token=$(gh auth token -h github.com 2>/dev/null) || {
     emit_state logged-out "Sign in with gh auth login to load GitHub data."
     exit 0
@@ -165,8 +265,10 @@ refresh_policy_fingerprint() {
 # therefore invalidate the cached dashboard before another helper can publish
 # or restore a stale notification snapshot.
 command -v flock >/dev/null 2>&1 || { emit_state error "flock is required for GitHub refresh serialization."; exit 1; }
-cache_dir="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/omarchy-github"
-if ! mkdir -p "$cache_dir" || ! chmod 700 "$cache_dir"; then
+cache_root="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/omarchy-github"
+cache_dir=$cache_root
+[[ -z $account ]] || cache_dir="$cache_root/accounts/$account"
+if ! mkdir -p "$cache_dir" || ! chmod 700 "$cache_root" || { [[ -n $account ]] && ! chmod 700 "$cache_root/accounts" "$cache_dir"; }; then
   emit_state error "Could not prepare private GitHub cache storage."
   exit 1
 fi
@@ -305,12 +407,6 @@ if [[ -z $mark_notification && -z $mark_all_before ]]; then
   cache_context_matches=true
   write_state "$last_refresh_attempt" 0 false -1 -1 || { emit_state error "Could not record the next GitHub refresh."; exit 1; }
 fi
-
-error_detail() {
-  tr '\n' ' ' <"$1" |
-    sed -E 's/(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})/[REDACTED]/g; s/(Authorization: *(token|Bearer) +)[^ ]+/\1[REDACTED]/Ig; s/[[:space:]]+/ /g; s/^ //; s/ $//' |
-    cut -c1-240
-}
 
 if [[ -n $mark_notification ]]; then
   if ! invalidate_cached_dashboard; then
