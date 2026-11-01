@@ -59,6 +59,37 @@ TestCase {
     return null
   }
 
+  function accountNotification(id, account, updatedAt) {
+    var item = notification(id, updatedAt)
+    item.account = account
+    return item
+  }
+
+  // What the helper emits when gh holds several logins: rows tagged with the
+  // account they came from, no single login, and a summary per account.
+  function multiAccountPayload(notifications) {
+    var data = JSON.parse(payload("ready", "Ready", notifications))
+    data.login = ""
+    data.accounts = [
+      {login: "alice", state: "ready", message: "", contributions: {total: 0, days: []}},
+      {login: "bob", state: "ready", message: "", contributions: {total: 0, days: []}}
+    ]
+    return JSON.stringify(data)
+  }
+
+  function completeMultiAccountReady(notifications) {
+    fetchProcess().complete(0, multiAccountPayload(notifications), "")
+    compare(service.state, "ready")
+  }
+
+  function markOneProcess() {
+    for (var i = 0; i < QsIo.ProcessRegistry.processes.length; i++) {
+      var process = QsIo.ProcessRegistry.processes[i]
+      if (process.command.indexOf("--mark-notification-read") !== -1) return process
+    }
+    return null
+  }
+
   function completeInitialReady(notifications) {
     var process = fetchProcess()
     verify(process !== null)
@@ -287,5 +318,156 @@ TestCase {
     compare(service.state, "rate-limited")
     compare(service.notifications.length, 0)
     compare(service.repositories.length, 1)
+  }
+
+  function test_accounts_are_exposed_only_for_multi_account_payloads() {
+    completeInitialReady([notification("101")])
+    compare(service.accounts.length, 0)
+
+    service.refresh()
+    completeMultiAccountReady([
+      accountNotification("101", "alice", "2020-01-02T00:00:00Z"),
+      accountNotification("201", "bob", "2020-01-05T00:00:00Z"),
+      accountNotification("202", "bob", "2020-01-05T00:00:00Z")
+    ])
+    compare(service.accounts.length, 2)
+    compare(service.accounts[0].login, "alice")
+    compare(service.accounts[1].login, "bob")
+    // One count for the bar icon, however the rows are spread across accounts.
+    compare(service.unreadCount, 3)
+    compare(service.alarming, true)
+
+    service.refresh()
+    fetchProcess().complete(0, payload("ready", "Ready", []), "")
+    compare(service.accounts.length, 0)
+  }
+
+  function test_single_mark_uses_the_account_that_owns_the_thread() {
+    completeMultiAccountReady([
+      accountNotification("101", "alice", "2020-01-02T00:00:00Z"),
+      accountNotification("201", "bob", "2020-01-05T00:00:00Z")
+    ])
+    service.markNotificationRead("201")
+    var marking = markOneProcess()
+    verify(marking !== null)
+    verify(marking.running)
+    compare(marking.command, [service.helperPath(), "--mark-notification-read", "201", "--account", "bob"])
+  }
+
+  function test_single_account_mark_names_no_account() {
+    completeInitialReady([notification("101")])
+    service.markNotificationRead("101")
+    compare(markOneProcess().command, [service.helperPath(), "--mark-notification-read", "101"])
+  }
+
+  function test_queued_mark_keeps_its_account_through_a_refresh() {
+    completeMultiAccountReady([accountNotification("201", "bob", "2020-01-05T00:00:00Z")])
+    service.refresh()
+    service.markNotificationRead("201")
+    compare(markOneProcess(), null)
+
+    // The refresh no longer lists the thread, so the row it came from is gone
+    // by the time the queued mark starts.
+    fetchProcess().complete(0, multiAccountPayload([]), "")
+    var marking = markOneProcess()
+    verify(marking !== null)
+    compare(marking.command, [service.helperPath(), "--mark-notification-read", "201", "--account", "bob"])
+  }
+
+  function test_bulk_mark_runs_once_per_account_with_its_own_boundary() {
+    completeMultiAccountReady([
+      accountNotification("101", "alice", "2020-01-02T00:00:00Z"),
+      accountNotification("201", "bob", "2020-01-05T00:00:00Z"),
+      accountNotification("202", "bob", "2020-01-05T00:00:00Z"),
+      accountNotification("203", "bob", "2020-01-04T00:00:00Z")
+    ])
+    var prepared = service.prepareMarkAllNotificationsRead()
+    verify(prepared !== "")
+    service.markAllNotificationsRead(prepared)
+    compare(service.notifications.length, 0)
+
+    var marking = markProcess()
+    verify(marking.running)
+    compare(marking.command, [
+      service.helperPath(),
+      "--mark-all-read-before", "2020-01-02T00:00:00Z",
+      "--mark-boundary-notification", "101",
+      "--account", "alice"
+    ])
+    marking.complete(0, '{"state":"ready"}', "")
+    verify(marking.running)
+    compare(marking.command, [
+      service.helperPath(),
+      "--mark-all-read-before", "2020-01-05T00:00:00Z",
+      "--mark-boundary-notification", "201",
+      "--mark-boundary-notification", "202",
+      "--account", "bob"
+    ])
+    marking.complete(0, '{"state":"ready"}', "")
+    compare(service.notificationActionStatus, "Notifications marked read. Refreshing…")
+
+    tryVerify(function() { return fetchProcess().running })
+    fetchProcess().complete(0, multiAccountPayload([]), "")
+    compare(Object.keys(service.hiddenNotifications).length, 0)
+  }
+
+  function test_bulk_mark_can_be_limited_to_one_account() {
+    completeMultiAccountReady([
+      accountNotification("101", "alice", "2020-01-02T00:00:00Z"),
+      accountNotification("201", "bob", "2020-01-05T00:00:00Z")
+    ])
+    var prepared = service.prepareMarkAllNotificationsRead("bob")
+    verify(prepared !== "")
+    service.markAllNotificationsRead(prepared)
+
+    compare(service.notifications.length, 1)
+    compare(service.notifications[0].id, "101")
+    var marking = markProcess()
+    compare(marking.command, [
+      service.helperPath(),
+      "--mark-all-read-before", "2020-01-05T00:00:00Z",
+      "--mark-boundary-notification", "201",
+      "--account", "bob"
+    ])
+    marking.complete(0, '{"state":"ready"}', "")
+    compare(service.notifications.length, 1)
+    compare(service.prepareMarkAllNotificationsRead("carol"), "")
+  }
+
+  function test_bulk_mark_stops_at_the_first_failing_account() {
+    completeMultiAccountReady([
+      accountNotification("101", "alice", "2020-01-02T00:00:00Z"),
+      accountNotification("201", "bob", "2020-01-05T00:00:00Z")
+    ])
+    service.markAllNotificationsRead(service.prepareMarkAllNotificationsRead())
+
+    var marking = markProcess()
+    marking.complete(1, '{"state":"error","message":"Permission denied"}', "")
+    // Bob is never attempted, and every row returns until GitHub confirms
+    // which ones are really read.
+    compare(marking.running, false)
+    compare(marking.command[marking.command.length - 1], "alice")
+    compare(service.notifications.length, 2)
+    compare(service.notificationActionStatus, "Permission denied")
+    tryVerify(function() { return fetchProcess().running })
+  }
+
+  function test_bulk_mark_failing_on_a_later_account_restores_every_row() {
+    completeMultiAccountReady([
+      accountNotification("101", "alice", "2020-01-02T00:00:00Z"),
+      accountNotification("201", "bob", "2020-01-05T00:00:00Z")
+    ])
+    service.markAllNotificationsRead(service.prepareMarkAllNotificationsRead())
+
+    var marking = markProcess()
+    marking.complete(0, '{"state":"ready"}', "")
+    verify(marking.running)
+    marking.complete(1, '{"state":"error","message":"Bad credentials"}', "")
+    compare(service.notifications.length, 2)
+    compare(service.notificationActionStatus, "Bad credentials")
+    tryVerify(function() { return fetchProcess().running })
+    fetchProcess().complete(0, multiAccountPayload([accountNotification("201", "bob", "2020-01-05T00:00:00Z")]), "")
+    compare(service.notifications.length, 1)
+    compare(Object.keys(service.hiddenNotifications).length, 0)
   }
 }
