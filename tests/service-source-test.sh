@@ -49,30 +49,44 @@ assert_contains $'function canonicalNotificationTimestamp(value) {\n        var 
   "notification boundaries are not shape validated"
 assert_contains 'return milliseconds <= Date.now() ? text : "";' \
   "future notification boundaries are accepted"
-assert_contains $'function prepareMarkAllNotificationsRead() {\n        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)\n            return "";' \
+assert_contains $'function prepareMarkAllNotificationsRead(account) {' \
+  "bulk confirmation cannot be limited to one account"
+assert_contains $'if (owners.length === 0 || loading || fetchProcess.running || markProcess.running)\n            return "";' \
   "bulk confirmation can be prepared during a dashboard refresh"
 assert_contains $'if (!/^\\d+$/.test(id)) {\n                notificationActionStatus = "Refresh before marking everything read.";' \
   "bulk confirmation accepts invalid boundary notification IDs"
-assert_contains 'return JSON.stringify({boundary: boundary, boundaryIds: boundaryIds, revision: notificationsRevision});' \
+assert_contains 'groups.push({account: owners[j], boundary: bound.boundary, boundaryIds: bound.boundaryIds});' \
+  "bulk confirmation does not capture a boundary per account"
+assert_contains 'return JSON.stringify({account: scope, groups: groups, revision: notificationsRevision});' \
   "bulk confirmation does not capture its boundary IDs and revision"
 assert_contains $'function markAllNotificationsRead(prepared) {\n        var confirmed = String(prepared || "");\n        if (confirmed === "" || loading || fetchProcess.running || markProcess.running)\n            return ;' \
   "bulk marking can start during a dashboard refresh"
-assert_contains $'if (confirmed !== prepareMarkAllNotificationsRead()) {\n            notificationActionStatus = "Notifications changed. Confirm again.";' \
+assert_contains $'if (confirmed !== prepareMarkAllNotificationsRead(snapshot ? snapshot.account : "")) {\n            notificationActionStatus = "Notifications changed. Confirm again.";' \
   "bulk marking does not verify the confirmed snapshot"
-assert_contains $'var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];\n        for (var i = 0; i < snapshot.boundaryIds.length; i++)\n            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));' \
+assert_contains $'var commandLine = [helperPath(), "--mark-all-read-before", String(group.boundary || "")];\n        for (var i = 0; i < group.boundaryIds.length; i++)\n            commandLine.push("--mark-boundary-notification", String(group.boundaryIds[i]));' \
   "bulk marking does not protect same-second arrivals"
-assert_contains $'function hideAllNotifications() {\n        var ids = [];\n        var hidden = copyMap(hiddenNotifications);\n        var remaining = [];\n        for (var i = 0; i < notifications.length; i++) {' \
+assert_contains $'if (group.account)\n            commandLine.push("--account", String(group.account));' \
+  "bulk marking does not run as the account that owns the threads"
+assert_contains $'function hideAllNotifications(account) {\n        var scope = String(account || "");\n        var ids = [];\n        var hidden = copyMap(hiddenNotifications);\n        var remaining = [];\n        for (var i = 0; i < notifications.length; i++) {' \
   "bulk marking does not batch its optimistic removal"
 assert_contains $'hiddenNotifications = hidden;\n            notifications = remaining;\n            notificationsRevision++;' \
   "bulk marking repeatedly updates the notification model"
 assert_contains $'function restoreHiddenNotifications(ids) {\n        var values = Array.isArray(ids) ? ids : [];\n        for (var i = values.length - 1; i >= 0; i--)' \
   "failed bulk marking does not preserve notification order"
-assert_contains $'markingAllNotifications = true;\n        markingAllNotificationIds = hideAllNotifications();\n        notificationActionStatus = "Marking all notifications read…";' \
+assert_contains $'markingAllNotifications = true;\n        markingAllNotificationIds = hideAllNotifications(snapshot.account);\n        notificationActionStatus = "Marking all notifications read…";' \
   "bulk marking does not provide immediate visible feedback"
 assert_contains $'if (all)\n                    root.restoreHiddenNotifications(root.markingAllNotificationIds);\n                else if (markedId !== "")' \
   "failed bulk marking does not restore its displayed notifications"
 assert_contains $'// GitHub is authoritative after every attempt. This reconciles\n            // successful, failed, and partially completed bulk operations.\n            root.refreshQueued = false;\n            Qt.callLater(root.refresh);' \
   "notification marking does not reconcile every result with an authoritative refresh"
+assert_contains 'accounts = Array.isArray(data.accounts) ? data.accounts : [];' \
+  "the account list is not read from the helper payload"
+assert_contains 'markProcess.command = [helperPath(), "--mark-notification-read", value].concat(account !== "" ? ["--account", account] : []);' \
+  "single-notification marking does not run as the account that owns the thread"
+assert_contains $'if (all && root.startNextMarkAll())\n                    return ;' \
+  "bulk marking does not continue with the next account"
+assert_contains $'root.markAllCommands = [];\n                var fallback' \
+  "a failed bulk mark still attempts the remaining accounts"
 assert_not_contains 'root.notifications = root.notifications.filter' \
   "notification marking still hides rows using stale local data"
 
