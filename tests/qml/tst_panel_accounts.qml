@@ -23,6 +23,15 @@ TestCase {
     return null
   }
 
+  // A manual refresh drops --automatic, so match on an option every run has.
+  function latestFetch() {
+    for (var i = 0; i < QsIo.ProcessRegistry.processes.length; i++) {
+      var process = QsIo.ProcessRegistry.processes[i]
+      if (process.command.indexOf("--include-archived") !== -1) return process
+    }
+    return null
+  }
+
   function days(first, second) {
     return [
       {date: "2025-09-07", count: first, level: first > 0 ? 4 : 0},
@@ -213,7 +222,7 @@ TestCase {
     chip("bob").clicked()
     compare(panel.activeAccount, "bob")
     service().refresh()
-    fetchProcess().complete(0, multiAccountPayload({accounts: [{login: "alice", state: "ready", message: "", contributions: {total: 4, days: days(3, 1)}}]}), "")
+    latestFetch().complete(0, multiAccountPayload({accounts: [{login: "alice", state: "ready", message: "", contributions: {total: 4, days: days(3, 1)}}]}), "")
     compare(panel.activeAccount, "")
   }
 

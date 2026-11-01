@@ -30,7 +30,7 @@ assert_contains $'text: github.notificationActionStatus\n            textFormat:
   "notification action status is not forced to plain text"
 assert_contains $'return summary\n              }\n              textFormat: Text.PlainText' \
   "dashboard warning text is not forced to plain text"
-assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            // Keep the displayed snapshot visible during refresh, but do not\n            // allow a destructive bulk action until that snapshot is current.\n            actionEnabled: github.state === "ready" && !github.loading\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
+assert_contains $'actionText: "Mark all read"\n            actionBusyText: "Marking…"\n            // Keep the displayed snapshot visible during refresh, but do not\n            // allow a destructive bulk action until that snapshot is current.\n            actionEnabled: github.state === "ready" && !github.loading\n            actionBusy: github.marking\n            actionRevision: github.notificationsRevision\n            actionPrepare: function() { return github.prepareMarkAllNotificationsRead(root.activeAccount) }\n            onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }' \
   "notification bulk action is not disabled while its displayed snapshot is refreshing"
 assert_not_contains 'Refreshing dashboard' \
   "a ready summary is still replaced by Refreshing dashboard while a fetch runs"
@@ -105,7 +105,7 @@ assert_contains $'model: root.notificationRows()\n            showExpansionContr
   "notification pagination still shows an inactive expansion control"
 assert_contains $'showReadAction: true\n      showTrailingIndicator: false\n      notificationId: String(modelData.id || "")' \
   "notification rows retain an open-link indicator beside their read action"
-assert_contains $'title: "ASSIGNED ISSUES"\n            count: github.assignedIssues.length\n            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)\n            expanded: root.issuesExpanded\n            footerButtonsBordered: true\n            openUrl: "https://github.com/issues/assigned"' \
+assert_contains $'title: "ASSIGNED ISSUES"\n            count: root.accountAssignedIssues.length\n            model: root.sectionRows(root.accountAssignedIssues, root.issuesExpanded)\n            expanded: root.issuesExpanded\n            footerButtonsBordered: true\n            openUrl: "https://github.com/issues/assigned"' \
   "assigned-issues open control does not retain its matching border"
 assert_contains 'readonly property bool showAction: section.count > 0 && section.actionText !== ""' \
   "bulk notification action disappears while data is loading"
@@ -137,9 +137,9 @@ assert_contains $'Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.
   "contribution cells do not anchor their shading on the theme foreground"
 assert_occurrences 'ContributionsBlock {' 1 \
   "the panel does not use one shared contribution calendar component"
-assert_contains $'Component {\n    id: contributionsBlockComponent\n    ContributionsBlock {\n      days: github.contributions.days\n      total: github.contributions.total\n      login: github.login' \
+assert_contains $'Component {\n    id: contributionsBlockComponent\n    ContributionsBlock {\n      objectName: "contributionsBlock"\n      days: root.calendar.days\n      total: root.calendar.total\n      login: root.activeAccount !== "" ? root.activeAccount : github.login' \
   "the shared contribution calendar does not bind to the helper output"
-assert_contains 'readonly property bool hasContributionCalendar: Array.isArray(github.contributions.days) && github.contributions.days.length > 0' \
+assert_contains 'readonly property bool hasContributionCalendar: Array.isArray(calendar.days) && calendar.days.length > 0' \
   "empty contribution payloads do not collapse the contribution section"
 assert_contains 'active: github.includeContributions' \
   "contributions loaders do not honour the includeContributions setting"
@@ -193,5 +193,22 @@ assert_occurrences 'visible: active' 3 \
   "inactive contribution placements remain visible"
 assert_occurrences 'height: active ? implicitHeight : 0' 3 \
   "inactive contribution placements still reserve blank dashboard space"
+
+# Account chips and tags exist only while several accounts share the dashboard,
+# so a single account keeps exactly the panel it had.
+assert_contains $'objectName: "accountChips"\n            visible: github.accounts.length > 1' \
+  "account chips are shown for a single account"
+assert_contains 'return github.accounts.length > 1 && activeAccount === "" && row && row.account ? row.account + " · " : ""' \
+  "rows name their account when it is already the only one shown"
+assert_occurrences 'root.accountTag(modelData)' 6 \
+  "a row type does not name its account"
+# Two accounts can see the same repository, run or issue, so every cursor key
+# carries the account or the cursor jumps to the first copy.
+assert_occurrences 'rowId: root.rowKey(modelData, index)' 6 \
+  "a row type can share a cursor key across accounts"
+assert_not_contains 'rowId: String(modelData.id || modelData.url || index)' \
+  "a row type still builds its cursor key without the account"
+assert_contains $'onActiveAccountChanged: {\n    notificationsPage = 0\n    if (notificationsSection) notificationsSection.disarmAction()\n  }' \
+  "switching account leaves Mark all armed for the previous list"
 
 echo "panel source tests passed"
