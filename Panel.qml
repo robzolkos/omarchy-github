@@ -79,8 +79,14 @@ Panel {
   readonly property var accountActions: accountRows(github.actions)
   readonly property var accountFailedActions: accountRows(github.failedActions)
   readonly property var accountRepositories: accountRows(github.repositories)
-  readonly property var calendar: activeAccount === "" ? github.contributions : (accountEntry(activeAccount).contributions || { total: 0, days: [] })
-  readonly property var shownRateLimit: activeAccount === "" ? github.rateLimit : accountEntry(activeAccount).rateLimit
+  readonly property var calendar: {
+    var entry = accountEntry(activeAccount)
+    return entry ? (entry.contributions || { total: 0, days: [] }) : github.contributions
+  }
+  readonly property var shownRateLimit: {
+    var entry = accountEntry(activeAccount)
+    return entry ? entry.rateLimit : github.rateLimit
+  }
   readonly property var displayedRepositories: filteredRepositories()
   readonly property bool hasContributionCalendar: Array.isArray(calendar.days) && calendar.days.length > 0
   readonly property var cursorTargets: buildCursorTargets()
@@ -115,7 +121,8 @@ Panel {
 
   // GitHub counts authored pull requests beyond the page the helper fetches.
   function myPullRequestsCount() {
-    var total = activeAccount === "" ? github.myPullRequestsTotal : Number(accountEntry(activeAccount).myPullRequestsTotal) || 0
+    var entry = accountEntry(activeAccount)
+    var total = entry ? Number(entry.myPullRequestsTotal) || 0 : github.myPullRequestsTotal
     return Math.max(total, accountMyPullRequests.length)
   }
 
