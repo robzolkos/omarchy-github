@@ -19,6 +19,8 @@ Panel {
   property string query: ""
   property string metricFilter: "all"
   property string sortMode: "updated"
+  // "" shows every account; a login narrows the dashboard to that account.
+  property string selectedAccount: ""
   property bool cursorActive: false
   property int cursorIndex: 0
   property int notificationsPage: 0
@@ -67,42 +69,94 @@ Panel {
     { value: "stars", label: "Stars" }, { value: "issues", label: "Issues" },
     { value: "prs", label: "PRs" }, { value: "actions", label: "Actions" }
   ]
+  // The chip's account, unless that account is gone from the latest refresh.
+  readonly property string activeAccount: accountEntry(selectedAccount) ? selectedAccount : ""
+  readonly property var accountChips: buildAccountChips()
+  readonly property var accountNotifications: accountRows(github.notifications)
+  readonly property var accountReviewRequests: accountRows(github.reviewRequests)
+  readonly property var accountMyPullRequests: accountRows(github.myPullRequests)
+  readonly property var accountAssignedIssues: accountRows(github.assignedIssues)
+  readonly property var accountActions: accountRows(github.actions)
+  readonly property var accountFailedActions: accountRows(github.failedActions)
+  readonly property var accountRepositories: accountRows(github.repositories)
+  readonly property var calendar: {
+    var entry = accountEntry(activeAccount)
+    return entry ? (entry.contributions || { total: 0, days: [] }) : github.contributions
+  }
+  readonly property var shownRateLimit: {
+    var entry = accountEntry(activeAccount)
+    return entry ? entry.rateLimit : github.rateLimit
+  }
   readonly property var displayedRepositories: filteredRepositories()
-  readonly property bool hasContributionCalendar: Array.isArray(github.contributions.days) && github.contributions.days.length > 0
+  readonly property bool hasContributionCalendar: Array.isArray(calendar.days) && calendar.days.length > 0
   readonly property var cursorTargets: buildCursorTargets()
   readonly property var selectedTarget: cursorTargets.length > 0 ? cursorTargets[Math.max(0, Math.min(cursorIndex, cursorTargets.length - 1))] : null
+
+  function accountEntry(login) {
+    for (var i = 0; i < github.accounts.length; i++) if (github.accounts[i].login === login) return github.accounts[i]
+    return null
+  }
+
+  function accountRows(rows) {
+    if (activeAccount === "") return rows
+    return rows.filter(function(row) { return row.account === activeAccount })
+  }
+
+  function buildAccountChips() {
+    var chips = [{ id: "", label: "All" }]
+    for (var i = 0; i < github.accounts.length; i++) chips.push({ id: github.accounts[i].login, label: github.accounts[i].login })
+    return chips
+  }
+
+  // Rows name their account only while several accounts share the list.
+  function accountTag(row) {
+    return github.accounts.length > 1 && activeAccount === "" && row && row.account ? row.account + " · " : ""
+  }
+
+  // Two accounts can both see the same repository, run or issue, so the
+  // account is part of what makes a row unique to the cursor.
+  function rowKey(row, index) {
+    return (row && row.account ? row.account + "/" : "") + String((row && (row.id || row.url)) || index)
+  }
+
+  // GitHub counts authored pull requests beyond the page the helper fetches.
+  function myPullRequestsCount() {
+    var entry = accountEntry(activeAccount)
+    var total = entry ? Number(entry.myPullRequestsTotal) || 0 : github.myPullRequestsTotal
+    return Math.max(total, accountMyPullRequests.length)
+  }
 
   function sectionRows(rows, expanded) {
     return rows.slice(0, expanded ? activityExpandedCount : activityPreviewCount)
   }
 
   function notificationPageCount() {
-    return Math.max(1, Math.ceil(github.notifications.length / activityPreviewCount))
+    return Math.max(1, Math.ceil(accountNotifications.length / activityPreviewCount))
   }
 
   function notificationRows() {
     var page = Math.max(0, Math.min(notificationsPage, notificationPageCount() - 1))
     if (page !== notificationsPage) notificationsPage = page
     var start = page * activityPreviewCount
-    return github.notifications.slice(start, start + activityPreviewCount)
+    return accountNotifications.slice(start, start + activityPreviewCount)
   }
 
   function buildCursorTargets() {
     var targets = []
     function add(kind, rows) {
-      for (var i = 0; i < rows.length; i++) targets.push({ key: kind + ":" + String(rows[i].id || rows[i].url || i), kind: kind, row: rows[i] })
+      for (var i = 0; i < rows.length; i++) targets.push({ key: kind + ":" + rowKey(rows[i], i), kind: kind, row: rows[i] })
     }
     add("notification", notificationRows())
-    add("review", sectionRows(github.reviewRequests, reviewsExpanded))
-    add("mypull", sectionRows(github.myPullRequests, myPullsExpanded))
-    add("issue", sectionRows(github.assignedIssues, issuesExpanded))
-    add("action", sectionRows(github.actions, actionsExpanded))
-    add("failure", sectionRows(github.failedActions, failuresExpanded))
+    add("review", sectionRows(accountReviewRequests, reviewsExpanded))
+    add("mypull", sectionRows(accountMyPullRequests, myPullsExpanded))
+    add("issue", sectionRows(accountAssignedIssues, issuesExpanded))
+    add("action", sectionRows(accountActions, actionsExpanded))
+    add("failure", sectionRows(accountFailedActions, failuresExpanded))
     add("repository", displayedRepositories)
     return targets
   }
 
-  function targetKey(kind, row, index) { return kind + ":" + String((row && (row.id || row.url)) || index) }
+  function targetKey(kind, row, index) { return kind + ":" + rowKey(row, index) }
   function selectedKey() { return selectedTarget ? selectedTarget.key : "" }
   function selectKey(key) {
     for (var i = 0; i < cursorTargets.length; i++) if (cursorTargets[i].key === key) { cursorActive = true; cursorIndex = i; return }
@@ -217,8 +271,8 @@ Panel {
   function filteredRepositories() {
     var needle = String(query || "").trim().toLowerCase()
     var rows = []
-    for (var i = 0; i < github.repositories.length; i++) {
-      var repo = github.repositories[i]
+    for (var i = 0; i < accountRepositories.length; i++) {
+      var repo = accountRepositories[i]
       if (needle !== "" && String(repo.nameWithOwner || repo.name || "").toLowerCase().indexOf(needle) === -1) continue
       if (metricFilter === "issues" && Number(repo.issues || 0) <= 0) continue
       if (metricFilter === "prs" && Number(repo.prs || 0) <= 0) continue
@@ -291,10 +345,15 @@ Panel {
   }
 
   onCursorTargetsChanged: ensureCursor()
+  // A pending Mark all confirmation belongs to the list it was armed on.
+  onActiveAccountChanged: {
+    notificationsPage = 0
+    if (notificationsSection) notificationsSection.disarmAction()
+  }
   onSettingsChanged: applyHostSettings()
   onBarChanged: if (bar) Qt.callLater(applyHostSettings)
 
-  Service { id: github }
+  Service { id: github; objectName: "githubService" }
 
   UrlLauncher {
     id: urlLauncher
@@ -497,6 +556,37 @@ Panel {
             }
           }
 
+          Flickable {
+            objectName: "accountChips"
+            visible: github.accounts.length > 1
+            width: parent.width
+            height: accountChipRow.implicitHeight
+            contentWidth: accountChipRow.implicitWidth
+            contentHeight: height
+            clip: true
+            flickableDirection: Flickable.HorizontalFlick
+            interactive: contentWidth > width
+            Row {
+              id: accountChipRow
+              spacing: Style.space(6)
+              Repeater {
+                model: root.accountChips
+                Button {
+                  required property var modelData
+                  objectName: "accountChip-" + (modelData.id || "all")
+                  text: modelData.label
+                  selected: root.activeAccount === modelData.id
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  verticalPadding: Style.spacing.controlPaddingY
+                  onClicked: root.selectedAccount = modelData.id
+                }
+              }
+            }
+          }
+
           Text {
             visible: github.notificationActionStatus !== ""
             width: parent.width
@@ -551,8 +641,9 @@ Panel {
 
           DashboardSection {
             id: notificationsSection
+            objectName: "notificationsSection"
             title: "UNREAD NOTIFICATIONS"
-            count: github.notifications.length
+            count: root.accountNotifications.length
             emptyText: github.state === "ready" ? "You're all caught up." : "No notifications loaded."
             model: root.notificationRows()
             showExpansionControl: false
@@ -570,15 +661,15 @@ Panel {
             actionEnabled: github.state === "ready" && !github.loading
             actionBusy: github.marking
             actionRevision: github.notificationsRevision
-            actionPrepare: function() { return github.prepareMarkAllNotificationsRead() }
+            actionPrepare: function() { return github.prepareMarkAllNotificationsRead(root.activeAccount) }
             onActionTriggered: function(prepared) { github.markAllNotificationsRead(prepared) }
           }
 
           DashboardSection {
             visible: count > 0
             title: "REVIEW REQUESTS"
-            count: github.reviewRequests.length
-            model: root.sectionRows(github.reviewRequests, root.reviewsExpanded)
+            count: root.accountReviewRequests.length
+            model: root.sectionRows(root.accountReviewRequests, root.reviewsExpanded)
             expanded: root.reviewsExpanded
             openUrl: "https://github.com/pulls/review-requested"
             onToggleExpanded: root.reviewsExpanded = !root.reviewsExpanded
@@ -586,13 +677,14 @@ Panel {
           }
 
           DashboardSection {
+            objectName: "myPullRequestsSection"
             visible: count > 0
             title: "MY PULL REQUESTS"
             // The search is capped at one page, so the fetched list can be
             // shorter than the real total. Show the total rather than implying
             // the section is complete.
-            count: Math.max(github.myPullRequestsTotal, github.myPullRequests.length)
-            model: root.sectionRows(github.myPullRequests, root.myPullsExpanded)
+            count: root.myPullRequestsCount()
+            model: root.sectionRows(root.accountMyPullRequests, root.myPullsExpanded)
             expanded: root.myPullsExpanded
             openUrl: "https://github.com/pulls"
             onToggleExpanded: root.myPullsExpanded = !root.myPullsExpanded
@@ -602,8 +694,8 @@ Panel {
           DashboardSection {
             visible: count > 0
             title: "ASSIGNED ISSUES"
-            count: github.assignedIssues.length
-            model: root.sectionRows(github.assignedIssues, root.issuesExpanded)
+            count: root.accountAssignedIssues.length
+            model: root.sectionRows(root.accountAssignedIssues, root.issuesExpanded)
             expanded: root.issuesExpanded
             footerButtonsBordered: true
             openUrl: "https://github.com/issues/assigned"
@@ -614,8 +706,8 @@ Panel {
           DashboardSection {
             visible: count > 0
             title: "RUNNING ACTIONS"
-            count: github.actions.length
-            model: root.sectionRows(github.actions, root.actionsExpanded)
+            count: root.accountActions.length
+            model: root.sectionRows(root.accountActions, root.actionsExpanded)
             expanded: root.actionsExpanded
             onToggleExpanded: root.actionsExpanded = !root.actionsExpanded
             delegateComponent: actionDelegate
@@ -624,8 +716,8 @@ Panel {
           DashboardSection {
             visible: count > 0
             title: "RECENT FAILED ACTIONS"
-            count: github.failedActions.length
-            model: root.sectionRows(github.failedActions, root.failuresExpanded)
+            count: root.accountFailedActions.length
+            model: root.sectionRows(root.accountFailedActions, root.failuresExpanded)
             expanded: root.failuresExpanded
             onToggleExpanded: root.failuresExpanded = !root.failuresExpanded
             delegateComponent: failedActionDelegate
@@ -646,7 +738,7 @@ Panel {
             width: parent.width
             // Driven by the fetched scope, not the setting, so it cannot claim
             // to list organization repositories before a refresh brings them in.
-            text: (github.fetchedRepositoryScope === "owned" ? "OWNED REPOSITORIES  " : "REPOSITORIES  ") + root.displayedRepositories.length + "/" + github.repositories.length
+            text: (github.fetchedRepositoryScope === "owned" ? "OWNED REPOSITORIES  " : "REPOSITORIES  ") + root.displayedRepositories.length + "/" + root.accountRepositories.length
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
@@ -717,7 +809,7 @@ Panel {
           Text {
             visible: root.displayedRepositories.length === 0
             width: parent.width
-            text: github.repositories.length === 0 ? "No repositories loaded." : "No repositories match these filters."
+            text: root.accountRepositories.length === 0 ? "No repositories loaded." : "No repositories match these filters."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -740,9 +832,9 @@ Panel {
           }
 
           Text {
-            visible: github.rateLimit && github.rateLimit.remaining !== undefined
+            visible: root.shownRateLimit && root.shownRateLimit.remaining !== undefined
             width: parent.width
-            text: "API requests remaining: " + (github.rateLimit ? github.rateLimit.remaining : "") +
+            text: "API requests remaining: " + (root.shownRateLimit ? root.shownRateLimit.remaining : "") +
               (github.fetchedAt !== "" ? " · updated " + root.relativeTime(github.fetchedAt) : "")
             color: root.dim
             font.family: root.fontFamily
@@ -1017,10 +1109,10 @@ Panel {
       width: parent ? parent.width : 0
       rowKind: "notification"
       rowIndex: index
-      rowId: String(modelData.id || modelData.url || index)
+      rowId: root.rowKey(modelData, index)
       glyph: modelData.type === "PullRequest" ? "" : "󰍩"
       title: modelData.title
-      detail: modelData.repository + " · " + modelData.reason + " · " + root.relativeTime(modelData.updatedAt)
+      detail: root.accountTag(modelData) + modelData.repository + " · " + modelData.reason + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       showReadAction: true
       showTrailingIndicator: false
@@ -1036,13 +1128,13 @@ Panel {
       width: parent ? parent.width : 0
       rowKind: "review"
       rowIndex: index
-      rowId: String(modelData.id || modelData.url || index)
+      rowId: root.rowKey(modelData, index)
       glyph: ""
       title: modelData.title
       // Drafts only appear here when the setting is on, and the reason to turn
       // it on is knowing which requests are early feedback rather than a real
       // review, so the row has to say which it is.
-      detail: modelData.repository + (modelData.draft ? " · draft" : "") + " · review requested · " + root.relativeTime(modelData.updatedAt)
+      detail: root.accountTag(modelData) + modelData.repository + (modelData.draft ? " · draft" : "") + " · review requested · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
     }
   }
@@ -1058,12 +1150,12 @@ Panel {
       width: parent ? parent.width : 0
       rowKind: "mypull"
       rowIndex: index
-      rowId: String(modelData.id || modelData.url || index)
+      rowId: root.rowKey(modelData, index)
       // A repository with no workflows reports no rollup at all, which the
       // plain pull request glyph conveys without implying a pending run.
       glyph: broken ? "󰅖" : (running ? "󰑮" : (checks === "SUCCESS" ? "󰄬" : ""))
       title: modelData.title
-      detail: modelData.repository + " #" + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
+      detail: root.accountTag(modelData) + modelData.repository + " #" + modelData.number + (modelData.draft ? " · draft" : "") + " · " + root.checkLabel(checks) + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       danger: broken
       pulse: running
@@ -1078,10 +1170,10 @@ Panel {
       width: parent ? parent.width : 0
       rowKind: "issue"
       rowIndex: index
-      rowId: String(modelData.id || modelData.url || index)
+      rowId: root.rowKey(modelData, index)
       glyph: "󰅩"
       title: modelData.title
-      detail: modelData.repository + " · assigned to you · " + root.relativeTime(modelData.updatedAt)
+      detail: root.accountTag(modelData) + modelData.repository + " · assigned to you · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
     }
   }
@@ -1094,10 +1186,10 @@ Panel {
       width: parent ? parent.width : 0
       rowKind: "action"
       rowIndex: index
-      rowId: String(modelData.id || modelData.url || index)
+      rowId: root.rowKey(modelData, index)
       glyph: "󰑮"
       title: modelData.name
-      detail: modelData.repository + " · " + modelData.status + (modelData.branch ? " · " + modelData.branch : "")
+      detail: root.accountTag(modelData) + modelData.repository + " · " + modelData.status + (modelData.branch ? " · " + modelData.branch : "")
       url: modelData.url
       pulse: true
     }
@@ -1111,10 +1203,10 @@ Panel {
       width: parent ? parent.width : 0
       rowKind: "failure"
       rowIndex: index
-      rowId: String(modelData.id || modelData.url || index)
+      rowId: root.rowKey(modelData, index)
       glyph: "󰅖"
       title: modelData.name
-      detail: modelData.repository + " · " + modelData.conclusion + " · " + root.relativeTime(modelData.updatedAt)
+      detail: root.accountTag(modelData) + modelData.repository + " · " + modelData.conclusion + " · " + root.relativeTime(modelData.updatedAt)
       url: modelData.url
       danger: true
     }
@@ -1466,9 +1558,10 @@ Panel {
   Component {
     id: contributionsBlockComponent
     ContributionsBlock {
-      days: github.contributions.days
-      total: github.contributions.total
-      login: github.login
+      objectName: "contributionsBlock"
+      days: root.calendar.days
+      total: root.calendar.total
+      login: root.activeAccount !== "" ? root.activeAccount : github.login
     }
   }
 

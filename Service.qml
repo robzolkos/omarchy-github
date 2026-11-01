@@ -13,6 +13,10 @@ Item {
     property string state: "loading"
     property string message: "Loading GitHub…"
     property string login: ""
+    // One entry per gh login when gh holds several (login, state, message,
+    // rateLimit, contributions, myPullRequestsTotal); empty for a single
+    // credential, which keeps the panel exactly as it was.
+    property var accounts: []
     property string fetchedRepositoryScope: "owned"
     property string fetchedAt: ""
     property var notifications: []
@@ -63,6 +67,13 @@ Item {
     // activity on the same thread can become visible again.
     property var pendingNotificationReconciliationIds: []
     property var markQueue: []
+    // The account of each thread waiting in markQueue. A refresh can drop the
+    // row before its turn comes, and the mark must still go out as its owner.
+    property var markAccounts: ({})
+    // Bulk marks run once per account, because each account has its own
+    // newest-second boundary and token. The commands still waiting after the
+    // one now running.
+    property var markAllCommands: []
     // Single-thread and bulk marking share one process, so the panel gates every
     // entry point on this rather than on whichever flag a given call happens to
     // set. A caller added later inherits the guard instead of having to know.
@@ -198,14 +209,15 @@ Item {
         notificationsRevision++;
     }
 
-    function hideAllNotifications() {
+    function hideAllNotifications(account) {
+        var scope = String(account || "");
         var ids = [];
         var hidden = copyMap(hiddenNotifications);
         var remaining = [];
         for (var i = 0; i < notifications.length; i++) {
             var item = notifications[i];
             var id = String(item.id || "");
-            if (id !== "") {
+            if (id !== "" && (scope === "" || String(item.account || "") === scope)) {
                 ids.push(id);
                 hidden[id] = item;
             } else {
@@ -291,9 +303,23 @@ Item {
         notificationActionStatus = "Marking notification read…";
         _markStdout = "";
         _markStderr = "";
-        markProcess.command = [helperPath(), "--mark-notification-read", value];
+        var account = String(markAccounts[value] || "");
+        delete markAccounts[value];
+        markProcess.command = [helperPath(), "--mark-notification-read", value].concat(account !== "" ? ["--account", account] : []);
         markProcess.running = true;
         return true;
+    }
+
+    // The account a notification row belongs to, whether it is still listed or
+    // already hidden; empty for a single credential.
+    function notificationAccount(id) {
+        var value = String(id || "");
+        for (var i = 0; i < notifications.length; i++) {
+            if (String(notifications[i].id || "") === value)
+                return String(notifications[i].account || "");
+        }
+        var hidden = hiddenNotifications[value];
+        return hidden && hidden.account ? String(hidden.account) : "";
     }
 
     function initialize(initialSettings) {
@@ -356,6 +382,7 @@ Item {
                 contributions = data.contributions && Array.isArray(data.contributions.days) ? data.contributions : {total: 0, days: []};
                 warnings = Array.isArray(data.warnings) ? data.warnings : [];
             }
+            accounts = Array.isArray(data.accounts) ? data.accounts : [];
             rateLimit = data.rateLimit || null;
         } catch (error) {
             state = "error";
@@ -372,6 +399,10 @@ Item {
         // Drop the row before GitHub round-trips. Opening a thread while a
         // refresh is already running used to no-op, so the icon stayed alarming
         // until the next poll even after the user had seen the notification.
+        var account = notificationAccount(value);
+        if (account !== "")
+            markAccounts[value] = account;
+
         hideNotification(value);
         enqueueMark(value);
         startQueuedMark();
@@ -389,52 +420,94 @@ Item {
         return milliseconds <= Date.now() ? text : "";
     }
 
-    // Capture the exact displayed boundary on the first click. A refresh must
-    // finish before confirmation is prepared so unseen activity cannot be
-    // marked read from the older displayed snapshot.
-    function prepareMarkAllNotificationsRead() {
-        if (notifications.length === 0 || loading || fetchProcess.running || markProcess.running)
-            return "";
-
+    // The newest displayed second among one account's notifications and the
+    // thread IDs updated at it, or null when a row cannot be bounded safely.
+    function notificationBoundary(rows) {
         var boundary = "";
-        for (var i = 0; i < notifications.length; i++) {
-            var updated = canonicalNotificationTimestamp(notifications[i].updatedAt);
+        for (var i = 0; i < rows.length; i++) {
+            var updated = canonicalNotificationTimestamp(rows[i].updatedAt);
             if (updated === "") {
                 notificationActionStatus = "Refresh before marking everything read.";
                 actionStatusTimer.restart();
-                return "";
+                return null;
             }
             if (updated > boundary)
                 boundary = updated;
         }
 
         var boundaryIds = [];
-        for (var j = 0; j < notifications.length; j++) {
-            if (String(notifications[j].updatedAt || "") !== boundary)
+        for (var j = 0; j < rows.length; j++) {
+            if (String(rows[j].updatedAt || "") !== boundary)
                 continue;
-            var id = String(notifications[j].id || "");
+            var id = String(rows[j].id || "");
             if (!/^\d+$/.test(id)) {
                 notificationActionStatus = "Refresh before marking everything read.";
                 actionStatusTimer.restart();
-                return "";
+                return null;
             }
             boundaryIds.push(id);
         }
-        return JSON.stringify({boundary: boundary, boundaryIds: boundaryIds, revision: notificationsRevision});
+        return {boundary: boundary, boundaryIds: boundaryIds};
+    }
+
+    // Capture the exact displayed boundary on the first click. A refresh must
+    // finish before confirmation is prepared so unseen activity cannot be
+    // marked read from the older displayed snapshot. Every account has its own
+    // boundary, since a later one would also cover unseen arrivals on an
+    // account whose newest displayed thread is older; `account` limits the
+    // snapshot to one of them.
+    function prepareMarkAllNotificationsRead(account) {
+        var scope = String(account || "");
+        var owners = [];
+        var rowsByOwner = {};
+        for (var i = 0; i < notifications.length; i++) {
+            var owner = String(notifications[i].account || "");
+            if (scope !== "" && owner !== scope)
+                continue;
+            if (rowsByOwner[owner] === undefined) {
+                rowsByOwner[owner] = [];
+                owners.push(owner);
+            }
+            rowsByOwner[owner].push(notifications[i]);
+        }
+        if (owners.length === 0 || loading || fetchProcess.running || markProcess.running)
+            return "";
+
+        var groups = [];
+        for (var j = 0; j < owners.length; j++) {
+            var bound = notificationBoundary(rowsByOwner[owners[j]]);
+            if (bound === null)
+                return "";
+            groups.push({account: owners[j], boundary: bound.boundary, boundaryIds: bound.boundaryIds});
+        }
+        return JSON.stringify({account: scope, groups: groups, revision: notificationsRevision});
+    }
+
+    function markAllCommand(group) {
+        var commandLine = [helperPath(), "--mark-all-read-before", String(group.boundary || "")];
+        for (var i = 0; i < group.boundaryIds.length; i++)
+            commandLine.push("--mark-boundary-notification", String(group.boundaryIds[i]));
+        if (group.account)
+            commandLine.push("--account", String(group.account));
+        return commandLine;
+    }
+
+    function startNextMarkAll() {
+        if (markAllCommands.length === 0)
+            return false;
+
+        _markStdout = "";
+        _markStderr = "";
+        markProcess.command = markAllCommands[0];
+        markAllCommands = markAllCommands.slice(1);
+        markProcess.running = true;
+        return true;
     }
 
     function markAllNotificationsRead(prepared) {
         var confirmed = String(prepared || "");
         if (confirmed === "" || loading || fetchProcess.running || markProcess.running)
             return ;
-
-        // Recompute immediately before starting. This protects non-panel callers
-        // as well as the panel's revision-bound confirmation.
-        if (confirmed !== prepareMarkAllNotificationsRead()) {
-            notificationActionStatus = "Notifications changed. Confirm again.";
-            actionStatusTimer.restart();
-            return ;
-        }
 
         var snapshot;
         try {
@@ -445,17 +518,20 @@ Item {
             return ;
         }
 
+        // Recompute immediately before starting. This protects non-panel callers
+        // as well as the panel's revision-bound confirmation.
+        if (confirmed !== prepareMarkAllNotificationsRead(snapshot ? snapshot.account : "")) {
+            notificationActionStatus = "Notifications changed. Confirm again.";
+            actionStatusTimer.restart();
+            return ;
+        }
+
         actionStatusTimer.stop();
         markingAllNotifications = true;
-        markingAllNotificationIds = hideAllNotifications();
+        markingAllNotificationIds = hideAllNotifications(snapshot.account);
         notificationActionStatus = "Marking all notifications read…";
-        _markStdout = "";
-        _markStderr = "";
-        var commandLine = [helperPath(), "--mark-all-read-before", String(snapshot.boundary || "")];
-        for (var i = 0; i < snapshot.boundaryIds.length; i++)
-            commandLine.push("--mark-boundary-notification", String(snapshot.boundaryIds[i]));
-        markProcess.command = commandLine;
-        markProcess.running = true;
+        markAllCommands = snapshot.groups.map(markAllCommand);
+        startNextMarkAll();
     }
 
     visible: false
@@ -531,9 +607,15 @@ Item {
             var all = root.markingAllNotifications;
             var markedId = root.markingNotificationId;
             if (exitCode === 0 && response && response.state === "ready") {
+                if (all && root.startNextMarkAll())
+                    return ;
+
                 root.queueNotificationReconciliation(all ? root.markingAllNotificationIds : [markedId]);
                 root.notificationActionStatus = all ? "Notifications marked read. Refreshing…" : "Notification marked read. Refreshing…";
             } else {
+                // Later accounts are not attempted. Every hidden row returns and
+                // the refresh below shows what GitHub really marked.
+                root.markAllCommands = [];
                 var fallback = all ? "Could not mark all notifications read." : "Could not mark notification read.";
                 root.notificationActionStatus = response && response.message ? String(response.message) : String(markErrors.text || root._markStderr || fallback).trim();
                 if (all)

@@ -31,6 +31,9 @@ jobs:
       - name: Run cache and refresh tests
         run: tests/cache-test.sh
 
+      - name: Run account tests
+        run: tests/accounts-test.sh
+
       - name: Run panel source tests
         run: tests/panel-source-test.sh
 
