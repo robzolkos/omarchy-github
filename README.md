@@ -33,12 +33,13 @@ Repository search, metric filters, and sorting make even large GitHub accounts m
 - Graceful partial results when an endpoint or repository is unavailable
 - Explicit logged-out, rate-limited, missing CLI, loading, and error states
 - Mouse and keyboard navigation throughout
+- Shows every account `gh` is logged into in one merged view, with chips to focus on one
 - Uses the existing GitHub CLI credential store—no token configuration or secret files
 
 ## Requirements
 
 - Omarchy Quattro with shell plugin support
-- [`gh`](https://cli.github.com/) on `PATH`
+- [`gh`](https://cli.github.com/) on `PATH`; 2.81 or newer to show more than one account
 - [`jq`](https://jqlang.github.io/jq/)
 - `flock` from util-linux; Omarchy includes it by default
 - `sha256sum` from GNU coreutils; Omarchy includes it by default
@@ -58,7 +59,7 @@ The `notifications` scope is required to read notifications and mark threads rea
 gh auth refresh -h github.com -s notifications -s repo
 ```
 
-Omarchy GitHub delegates authentication entirely to `gh`. It never logs or persists your GitHub token. The helper derives a one-way in-memory fingerprint from the active token so cached dashboard data and rate-limit state cannot cross accounts; only that fingerprint is stored.
+Omarchy GitHub delegates authentication entirely to `gh`. It never logs or persists your GitHub token. The helper derives a one-way in-memory fingerprint from the token it uses so cached dashboard data and rate-limit state cannot cross accounts; only that fingerprint is stored.
 
 ## Install
 
@@ -106,6 +107,7 @@ omarchy plugin remove robzolkos.github
 | Right or middle click Octocat | Refresh |
 | Click a row | Open it on GitHub; notification rows are also marked read |
 | Gear button in the panel header | Open the settings page |
+| Account chips under the header (two or more accounts) | Show one account, or All |
 | Check button on a notification | Mark the thread read immediately, then confirm with GitHub |
 | **Mark all read** in the notifications footer | Arm the bulk mark-as-read |
 | **Confirm?** on the armed button | Mark every notification on screen read |
@@ -123,6 +125,8 @@ Activity sections show five items initially and expand to a bounded list of 25. 
 
 The notifications footer also carries **Mark all read**. The first click captures the displayed notification snapshot and changes the label to **Confirm?**; only the second click sends the request. The confirmation lapses after a few seconds, when the panel closes, when a refresh changes the notification list, and whenever another mark is running. Notifications before the newest displayed second are handled in bulk, while displayed threads from that boundary second are marked by ID so same-second arrivals stay unread. The dashboard refreshes from GitHub after every attempt; large inboxes processed asynchronously may briefly retain threads that are already on their way out.
 
+With several accounts, each account gets its own snapshot and boundary second. One shared boundary could mark unseen notifications on an account whose newest displayed thread is older.
+
 ## Repository dashboard
 
 Every listed repository includes:
@@ -134,6 +138,19 @@ Every listed repository includes:
 - Last-updated time
 
 Use the filter chips to show all repositories or only repositories with a non-zero issue, PR, star, or active Actions count. Sort by update time, name, or any metric. Search always runs against the complete fetched repository list, even when rendered rows are capped.
+
+## Multiple accounts
+
+When `gh` is logged into more than one github.com account, the widget shows all of them. There is no setting. Run `gh auth login` for another account and it appears on the next refresh.
+
+- Rows from every account share one list. In All, each row starts with the account it belongs to. The bar icon and the summary under the title count all accounts together.
+- Chips under the header read All, then one per account. An account chip narrows the notifications, pull requests, issues, Actions, repositories, contribution calendar and API quota line to that account. In All, the calendar adds up the days of every account. With one account there are no chips and nothing looks different.
+- Marking a notification read uses the token of the account the notification belongs to. **Mark all read** covers the account whose chip is selected, or every account in All, one account after another, and stops at the first failure.
+- Every account has its own token, refresh schedule, rate-limit state and cache, in `~/.cache/omarchy-github/accounts/<login>`. An account that hits its rate limit is named in the warning line and keeps showing its cached rows while the others keep refreshing.
+- A `GH_TOKEN` or `GITHUB_TOKEN` in the environment keeps the single-token behavior. That token is used for everything and no other account is read.
+- A repository or workflow run that two of your accounts can both see is listed once per account. Limits such as the maximum number of failed Actions apply to each account.
+
+Accounts are found with `gh auth status --json hosts`, which asks GitHub to check each login. That costs one small request per account each time the helper starts. With a single login, or with a `gh` older than 2.81, the widget uses the active account exactly as before.
 
 ## Settings
 
@@ -188,6 +205,7 @@ From an existing checkout, validate and test the plugin:
 omarchy plugin validate .
 tests/helper-test.sh
 tests/cache-test.sh
+tests/accounts-test.sh
 tests/panel-source-test.sh
 tests/service-source-test.sh
 ```
@@ -212,7 +230,8 @@ The shell watches local plugin files, making QML iteration fast.
 - Status-specific, paginated Actions requests prevent busy repositories from hiding active runs.
 - Completed runs are server-bounded to the configured failure window.
 - Independent requests allow successful sections to remain available when one endpoint fails.
-- A private cache is bound to the active credential fingerprint and the options that shape fetched data. Refresh timing is recomputed from the current interval, and successful notification mutations invalidate the cached snapshot.
+- With several `gh` accounts, the helper lists the logins, runs itself once per login with `--account <login>` and the token from `gh auth token --user <login>`, and merges the payloads, tagging each row with its account.
+- A private cache is bound to the credential fingerprint and the options that shape fetched data. Refresh timing is recomputed from the current interval, and successful notification mutations invalidate the cached snapshot.
 - After its persisted refresh gates, one `gh api --include /rate_limit` preflight reads core REST quota and server retry headers. A confirmed throttle without a server deadline uses a brief local retry guard, which is not shown as a GitHub reset time.
 
 Run the helper directly to inspect its JSON output:
@@ -220,6 +239,8 @@ Run the helper directly to inspect its JSON output:
 ```bash
 ./omarchy-github-fetch --action-scan recent --action-repo-limit 15 | jq
 ```
+
+Add `--account <login>` to fetch a single `gh` login.
 
 ## License
 
