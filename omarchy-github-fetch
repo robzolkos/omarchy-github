@@ -510,10 +510,10 @@ while :; do
   # the configured scope, including private repositories reached through an
   # organization. `$cursor` belongs to GraphQL; only validated values expand.
   # shellcheck disable=SC2016
-  if ! page=$(gh api graphql -f query='query($cursor:String) { viewer { login repositories(first:100,after:$cursor,ownerAffiliations:'"$repository_affiliations"',affiliations:'"$repository_affiliations"',orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { name nameWithOwner url isArchived isFork stargazerCount updatedAt issues(states:OPEN){totalCount} pullRequests(states:OPEN){totalCount} } pageInfo { hasNextPage endCursor } } } rateLimit { remaining resetAt cost } }' -F cursor="$cursor" 2>"$tmp/graphql.err"); then api_error repositories "$tmp/graphql.err"; graphql_ok=false; break; fi
+  if ! page=$(gh api graphql -f query='query($cursor:String) { viewer { login repositories(first:100,after:$cursor,ownerAffiliations:'"$repository_affiliations"',affiliations:'"$repository_affiliations"',orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { name nameWithOwner url isArchived isFork stargazerCount updatedAt issues(states:OPEN){totalCount} pullRequests(states:OPEN){totalCount} defaultBranchRef { name target { oid } } } pageInfo { hasNextPage endCursor } } } rateLimit { remaining resetAt cost } }' -F cursor="$cursor" 2>"$tmp/graphql.err"); then api_error repositories "$tmp/graphql.err"; graphql_ok=false; break; fi
   printf '%s\n' "$page" >"$tmp/page.json"
   login=$(jq -r '.data.viewer.login // ""' "$tmp/page.json")
-  jq '[.data.viewer.repositories.nodes[] | {name,nameWithOwner,url,archived:.isArchived,fork:.isFork,stars:.stargazerCount,issues:.issues.totalCount,prs:.pullRequests.totalCount,updatedAt,activeActions:0}]' "$tmp/page.json" >"$tmp/page.repos"
+  jq '[.data.viewer.repositories.nodes[] | {name,nameWithOwner,url,archived:.isArchived,fork:.isFork,stars:.stargazerCount,issues:.issues.totalCount,prs:.pullRequests.totalCount,updatedAt,activeActions:0,defaultBranch:(.defaultBranchRef.name // ""),latestCommit:(.defaultBranchRef.target.oid // "")}]' "$tmp/page.json" >"$tmp/page.repos"
   jq -s '.[0]+.[1]' "$tmp/repos.json" "$tmp/page.repos" >"$tmp/repos.next" && mv "$tmp/repos.next" "$tmp/repos.json"
   jq '.data.rateLimit // null' "$tmp/page.json" >"$tmp/rate.json"
   [[ $(jq -r '.data.viewer.repositories.pageInfo.hasNextPage // false' "$tmp/page.json") == true ]] || break

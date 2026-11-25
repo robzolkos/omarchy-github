@@ -17,7 +17,7 @@ The dashboard is ordered by urgency so the most actionable work appears first:
 - **Assigned issues** — keep track of open issues assigned to you
 - **Active GitHub Actions** — monitor queued, pending, requested, waiting, and running workflows
 - **Recent workflow failures** — jump directly to failed, timed-out, or action-required runs
-- **Repositories** — browse the repositories you own, and optionally those you reach through an organization, with open issue, open PR, star, and active workflow counts
+- **Repositories** — browse the repositories you own, and optionally those you reach through an organization, with open issue, open PR, star, and active workflow counts, plus one-click links to each repository's default branch, pull requests, and latest commit
 
 Repository search, metric filters, and sorting make even large GitHub accounts manageable. Filter to repositories with issues, PRs, stars, or active Actions, then sort by the metric that matters.
 
@@ -106,12 +106,14 @@ omarchy plugin remove robzolkos.github
 | Right or middle click Octocat | Refresh |
 | Click a row | Open it on GitHub; notification rows are also marked read |
 | Gear button in the panel header | Open the settings page |
+| Branch, pull request, and commit buttons on a repository | Open that view of the repository on GitHub |
 | Check button on a notification | Mark the thread read immediately, then confirm with GitHub |
 | **Mark all read** in the notifications footer | Arm the bulk mark-as-read |
 | **Confirm?** on the armed button | Mark every notification on screen read |
 | `j` / `k` or arrow keys | Move through visible rows |
 | `Enter` / `Space` | Open the highlighted row |
 | `m` | Mark the highlighted notification read |
+| `b` / `p` / `c` | Open the highlighted repository's default branch, pull requests, or latest commit |
 | `/` | Focus repository search |
 | `r` | Refresh |
 | `Escape` in search | Clear search and return to row navigation |
