@@ -119,12 +119,12 @@ JSON
   # viewer-access affiliation filters.
   if [[ $* == *'ownerAffiliations:[OWNER,ORGANIZATION_MEMBER]'* && $* == *'affiliations:[OWNER,ORGANIZATION_MEMBER]'* ]]; then
     cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2}},{"name":"work","nameWithOwner":"acme/work","url":"https://github.com/acme/work","isArchived":false,"isFork":false,"stargazerCount":7,"updatedAt":"2026-01-06T00:00:00Z","issues":{"totalCount":4},"pullRequests":{"totalCount":5}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4998,"resetAt":"2026-01-01T01:00:00Z","cost":2}}}
+{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2},"defaultBranchRef":{"name":"main","target":{"oid":"0123456789abcdef0123456789abcdef01234567"}}},{"name":"work","nameWithOwner":"acme/work","url":"https://github.com/acme/work","isArchived":false,"isFork":false,"stargazerCount":7,"updatedAt":"2026-01-06T00:00:00Z","issues":{"totalCount":4},"pullRequests":{"totalCount":5}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4998,"resetAt":"2026-01-01T01:00:00Z","cost":2}}}
 JSON
     exit 0
   fi
   cat <<'JSON'
-{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4999,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
+{"data":{"viewer":{"login":"octocat","repositories":{"nodes":[{"name":"hello","nameWithOwner":"octocat/hello","url":"https://github.com/octocat/hello","isArchived":false,"isFork":false,"stargazerCount":42,"updatedAt":"2026-01-01T00:00:00Z","issues":{"totalCount":3},"pullRequests":{"totalCount":2},"defaultBranchRef":{"name":"main","target":{"oid":"0123456789abcdef0123456789abcdef01234567"}}},{"name":"old","nameWithOwner":"octocat/old","url":"https://github.com/octocat/old","isArchived":true,"isFork":false,"stargazerCount":1,"updatedAt":"2020-01-01T00:00:00Z","issues":{"totalCount":0},"pullRequests":{"totalCount":0}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}},"rateLimit":{"remaining":4999,"resetAt":"2026-01-01T01:00:00Z","cost":1}}}
 JSON
   exit 0
 fi
@@ -173,6 +173,7 @@ chmod +x "$sandbox/gh"
 out=$(PATH="$sandbox:$PATH" "$HELPER" --action-scan all --failed-days 7 --failed-limit 5)
 assert_jq '.state == "ready" and .login == "octocat"' "$out" "ready state"
 assert_jq '.repositories|length == 1 and .[0].issues == 3 and .[0].prs == 2 and .[0].stars == 42 and .[0].activeActions == 1' "$out" "repository metrics"
+assert_jq '.repositories[] | select(.nameWithOwner == "octocat/hello") | .defaultBranch == "main" and .latestCommit == "0123456789abcdef0123456789abcdef01234567"' "$out" "repository default branch and latest commit"
 assert_jq '.notifications|length == 2 and .[0].url == "https://github.com/octocat/hello/pull/7" and .[1].url == "https://github.com/octocat/hello"' "$out" "type-aware notification conversion and fallback"
 assert_jq '.reviewRequests|length == 1 and .[0].repository == "octocat/hello"' "$out" "review requests"
 assert_jq '(.assignedIssues|length == 1) and (.assignedIssues[0].url|endswith("/issues/8"))' "$out" "assigned issues"

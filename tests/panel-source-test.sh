@@ -56,6 +56,10 @@ assert_contains $'function openRow(kind, id, url) {\n    var target = String(url
   "a rejected notification URL is still marked read"
 assert_contains $'function markSelectedRead() {\n    if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))' \
   "keyboard notification marking is blocked during refresh"
+assert_contains $'function openSelectedRepoLink(kind) {\n    if (selectedTarget && selectedTarget.kind === "repository") openUrl(repoLink(selectedTarget.row, kind))' \
+  "repository link keys act on rows other than the highlighted repository"
+assert_contains 'if (kind === "commit" && /^[0-9a-f]{40}$/.test(commit))' \
+  "repository commit links are built from unvalidated object ids"
 assert_contains $'onClicked: root.openRow(linkRow.rowKind, linkRow.notificationId || linkRow.rowId, linkRow.url)' \
   "clicking a notification does not open and mark it read"
 assert_contains $'function openUrl(url) {\n    var accepted = urlLauncher.openUrl(url)\n    if (accepted) close()\n    return accepted\n  }' \

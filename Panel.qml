@@ -130,6 +130,21 @@ Panel {
   function markSelectedRead() {
     if (selectedTarget && selectedTarget.kind === "notification") github.markNotificationRead(String(selectedTarget.row.id || ""))
   }
+  // Links into a repository's default branch. Empty repositories have no
+  // branch or commit, so those links come back empty and their buttons hide.
+  function repoLink(repo, kind) {
+    var base = String((repo && repo.url) || "")
+    if (base === "") return ""
+    var branch = String(repo.defaultBranch || "")
+    var commit = String(repo.latestCommit || "")
+    if (kind === "pulls") return base + "/pulls"
+    if (kind === "branch" && branch !== "") return base + "/tree/" + branch.split("/").map(encodeURIComponent).join("/")
+    if (kind === "commit" && /^[0-9a-f]{40}$/.test(commit)) return base + "/commit/" + commit
+    return ""
+  }
+  function openSelectedRepoLink(kind) {
+    if (selectedTarget && selectedTarget.kind === "repository") openUrl(repoLink(selectedTarget.row, kind))
+  }
   function applyPanelWheel(event) {
     if (!panelFlick || (sortPicker && sortPicker.popupOpen)) return false
     var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
@@ -360,6 +375,9 @@ Panel {
         if (text === "r" || text === "R") github.refresh()
         else if (text === "/") Qt.callLater(function() { search.forceActiveFocus() })
         else if (text === "m" || text === "M") root.markSelectedRead()
+        else if (text === "b" || text === "B") root.openSelectedRepoLink("branch")
+        else if (text === "p" || text === "P") root.openSelectedRepoLink("pulls")
+        else if (text === "c" || text === "C") root.openSelectedRepoLink("commit")
       }
 
       // Rotating the key catcher flips both pages together as one card.
@@ -1458,6 +1476,25 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
+        }
+      }
+      Repeater {
+        model: [
+          { kind: "branch", icon: "󰘬", tip: "Open the default branch (B)" },
+          { kind: "pulls", icon: "", tip: "Open pull requests (P)" },
+          { kind: "commit", icon: "󰜘", tip: "Open the latest commit (C)" }
+        ]
+        PanelActionButton {
+          required property var modelData
+          readonly property string link: root.repoLink(repoRow.repo, modelData.kind)
+          visible: link !== ""
+          iconText: modelData.icon
+          tooltipText: modelData.tip
+          foreground: root.dim
+          hoverColor: Color.accent
+          fontFamily: root.fontFamily
+          bordered: false
+          onClicked: root.openUrl(link)
         }
       }
     }
